@@ -16,7 +16,7 @@ from urllib3.util.retry import Retry
 from DrissionPage import ChromiumPage, ChromiumOptions
 
 # ==========================================
-# 🔐 SECURE CONFIGURATION (Obfuscated)
+# 🔐 SECURE CONFIGURATION
 # ==========================================
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -24,10 +24,15 @@ sys.stdout.reconfigure(encoding='utf-8')
 def d(s):
     return base64.b64decode(s).decode('utf-8')
 
+# Secrets Load
 TOKEN_1 = os.environ.get("S_KEY_1")
 TOKEN_2 = os.environ.get("S_KEY_2")
 ADMIN_ID = os.environ.get("A_ID")
 RAW_COOKIES = os.environ.get("COOKIES_JSON")
+
+# Check Credentials at Startup
+if not TOKEN_1 or not TOKEN_2 or not ADMIN_ID:
+    print("❌ CRITICAL ERROR: Telegram Tokens or Admin ID missing in Secrets!", flush=True)
 
 DOMAIN_ENC = "d3d3LnNoZWluaW5kaWEuaW4="
 API_CAT_ENC = "L2FwaS9jYXRlZ29yeS9zdmVyc2UtNTkzOS0zNzk2MQ=="
@@ -38,12 +43,13 @@ CAT_API = d(API_CAT_ENC)
 PROD_API = d(API_P_ENC)
 
 SESSION_DB_PATH = "secure_session.db"
-CHECK_INTERVAL = 0.05  # ⚡ ULTRA FAST
+CHECK_INTERVAL = 0.05
 COOKIE_FILE = "runtime_auth.json"
-NUM_WORKERS = 50 
+
+# 🔥 OPTIMIZED FOR GITHUB SERVER (Prevent Crashing)
+NUM_WORKERS = 30  
 BURST_THRESHOLD = 15
 
-# 5 Hours 50 Minutes Limit
 MAX_RUNTIME = 5 * 3600 + 50 * 60 
 
 URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
@@ -58,7 +64,7 @@ CATEGORY_CONFIGS = {
 
 tg_session = requests.Session()
 retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-tg_session.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=200, pool_maxsize=200))
+tg_session.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=100, pool_maxsize=100))
 
 # ==========================================
 # 🛠️ UTILITY FUNCTIONS
@@ -69,7 +75,9 @@ def log(msg):
     except: pass
 
 def send_signal(message, token, image_url=None, button_url=None):
-    if not token or not ADMIN_ID: return
+    if not token or not ADMIN_ID:
+        log("❌ Signal Failed: Missing Token or Admin ID")
+        return
     try:
         payload = {"chat_id": ADMIN_ID, "parse_mode": "HTML"}
         if button_url:
@@ -84,9 +92,13 @@ def send_signal(message, token, image_url=None, button_url=None):
             payload["text"] = message
             payload["disable_web_page_preview"] = False
         
-        tg_session.post(url, data=payload, timeout=30)
+        # Increased timeout for stability
+        resp = tg_session.post(url, data=payload, timeout=45)
+        if resp.status_code != 200:
+            log(f"⚠️ TG API Error: {resp.text}")
+
     except Exception as e:
-        log(f"⚠️ Signal Error: {e}")
+        log(f"⚠️ Signal Network Error: {e}")
 
 def resolve_token(cat_name, p_data):
     if cat_name == 'TypeB': return TOKEN_1
@@ -109,11 +121,11 @@ class SecureMonitor:
         self.cache = set()
         self.start_ts = time.time()
         
-        # 🔥 RAM LOGIC: Clear DB on Start for Fresh Session
+        # 🔥 RAM LOGIC: Fresh Start
         if os.path.exists(SESSION_DB_PATH):
             try:
                 os.remove(SESSION_DB_PATH)
-                log("🗑️ Old Session Cleared. Starting Fresh RAM Session.")
+                log("🗑️ RAM Cleared: Starting Fresh Session.")
             except: pass
         self.init_storage()
 
@@ -121,13 +133,13 @@ class SecureMonitor:
             try:
                 with open(COOKIE_FILE, 'w') as f:
                     f.write(RAW_COOKIES)
-                log("🍪 Auth Credentials Injected.")
+                log("🍪 Cookies Loaded.")
             except: pass
 
     def check_time(self):
         elapsed = time.time() - self.start_ts
         if elapsed > MAX_RUNTIME:
-            log(f"🛑 Time Limit Reached ({int(elapsed/60)} mins). Exiting for restart.")
+            log(f"🛑 Time Limit Reached. Restarting...")
             self.running = False
             return False
         return True
@@ -173,7 +185,7 @@ class SecureMonitor:
         return co
 
     def launch(self):
-        log("🚀 Initializing Secure Environment...")
+        log("🚀 Launching Browser...")
         port = random.randint(30001, 40000)
         co = self.get_opts(port)
         self.browser = ChromiumPage(co)
@@ -188,9 +200,9 @@ class SecureMonitor:
                     self.browser.set.cookies(c_data)
                     self.browser.refresh()
                     time.sleep(2)
-                    log("✅ Session Restored.")
+                    log("✅ Auth Success.")
             except Exception as e:
-                log(f"⚠️ Session Load Error: {e}")
+                log(f"⚠️ Auth Error: {e}")
 
         CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
         for cat in ['TypeA', 'TypeB']:
@@ -211,9 +223,9 @@ class SecureMonitor:
         try: return tab.run_js(js, timeout=12)
         except: return None
 
-    # 🔥 BURST LOGIC: Sends "FAST ALERT"
+    # 🔥 BURST (Basic Info)
     def fast_alert(self, items, token):
-        log(f"⚡ BURST MODE: Sending {len(items)} fast alerts...")
+        log(f"⚡ Bursting {len(items)} items...")
         for p in items:
             try:
                 pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
@@ -222,12 +234,12 @@ class SecureMonitor:
                 img = p.get('url', '')
                 if 'images' in p and p['images']: img = p['images'][0].get('url')
                 
-                # Burst Message Body
                 msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>\n<i>Fetching details...</i>"
                 send_signal(msg, token, image_url=img, button_url=link)
-                time.sleep(0.1)
+                time.sleep(0.1) # Safe throttle
             except: pass
 
+    # 🔥 DETAILED PROCESSOR
     def _processor(self):
         while self.running:
             try:
@@ -237,15 +249,18 @@ class SecureMonitor:
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
                 use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
                 
+                # Robust Retry
                 for _ in range(5):
                     full_d = self.js_fetch(use_tab, api_url)
                     if isinstance(full_d, dict): break
                     time.sleep(1.5)
                 
+                # Proceed even if fetch failed (send basic data)
                 self.compose_alert(task['id'], full_d, task['burst'], task['tkn'], task['base'])
                 self.q.task_done()
             except queue.Empty: continue
-            except Exception: pass
+            except Exception as e:
+                log(f"❌ Worker Error: {e}")
 
     def get_img(self, data):
         try:
@@ -254,7 +269,6 @@ class SecureMonitor:
                    data['images'][0]['url']
         except: return None
 
-    # 🔥 ALERT LOGIC: Matches Standalone Titles
     def compose_alert(self, pid, data, burst, tkn, b_data):
         try:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
@@ -281,14 +295,13 @@ class SecureMonitor:
                 except: img = None
                 stk_txt = "⚠️ Details Fetch Failed"
 
-            # Logic: If Burst ran (<=15), this is "STOCK INFO" (2nd msg).
-            # If Burst skipped (>15), this is "NEW ARRIVAL" (1st msg).
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
             
             msg = f"{head}\n\nDf <b>{name}</b>\n💰 <b>{price}</b>\n\n📏 <b>Status:</b>\n<pre>{stk_txt}</pre>\n\n⚡ Time: {ts}"
             send_signal(msg, tkn, image_url=img, button_url=link)
             log(f"✅ Alert Sent: {pid}")
-        except Exception: pass
+        except Exception as e:
+            log(f"❌ Alert Gen Error: {e}")
 
     def scanner(self, cat_key):
         cfg = CATEGORY_CONFIGS[cat_key]
@@ -298,7 +311,7 @@ class SecureMonitor:
             if not self.check_time(): break
             
             try:
-                # 1. Start with Page 0
+                # 1. Page 0 Scan
                 first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
                 data = self.js_fetch(cfg['tab'], first_page_url)
                 
@@ -307,13 +320,13 @@ class SecureMonitor:
                 if not isinstance(data, dict):
                     time.sleep(1); continue
 
-                # 2. Get Total Pages
+                # 2. Pagination Logic
                 pagination = data.get('pagination', {})
                 total_pages = pagination.get('totalPages', 1)
                 
                 all_products = []
                 
-                # 3. 🔥 FULL PAGINATION LOOP (0 to Total)
+                # 3. Collect ALL Items (Page 0 to N)
                 for page_num in range(total_pages):
                     if page_num == 0:
                         page_products = data.get('products', [])
@@ -327,7 +340,7 @@ class SecureMonitor:
                     
                     all_products.extend(page_products)
 
-                # 4. Filter New Items (RAM Logic)
+                # 4. Filter New
                 new_session_items = []
                 for p in all_products:
                     pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
@@ -338,26 +351,23 @@ class SecureMonitor:
 
                 count = len(new_session_items)
                 if count > 0:
-                    log(f"✨ [{cat_key}] Detected {count} items (Scanned {total_pages} pages)")
+                    log(f"✨ [{cat_key}] Detected {count} items (Pages: {total_pages})")
                     
-                    # 5. 🔥 BURST LOGIC SWITCH
                     do_burst = count <= BURST_THRESHOLD
-                    
                     token_pairs = [(p, resolve_token(cat_key, p)) for p in new_session_items]
 
+                    # BURST (Fast Messages)
                     if do_burst:
-                        # Case 1: Less items -> Send Fast Alert FIRST
                         t1_items = [x[0] for x in token_pairs if x[1] == TOKEN_1]
                         t2_items = [x[0] for x in token_pairs if x[1] == TOKEN_2]
                         if t1_items: threading.Thread(target=self.fast_alert, args=(t1_items, TOKEN_1)).start()
                         if t2_items: threading.Thread(target=self.fast_alert, args=(t2_items, TOKEN_2)).start()
                     else:
-                        # Case 2: Many items -> Skip Fast Alert, only Detailed
-                        log(f"⚠️ Large Batch ({count}). Skipping Burst to avoid spam.")
+                        log(f"⚠️ Large Batch ({count}). Sending Detailed Alerts Directly.")
 
+                    # QUEUE (Detailed Messages - ALWAYS RUNS)
                     for p, tkn in token_pairs:
                         pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
-                        # 'burst': do_burst tells worker which title to use
                         self.q.put({'id': pid, 'cat': cat_key, 'burst': do_burst, 'base': p, 'tkn': tkn})
 
                 time.sleep(CHECK_INTERVAL)
@@ -367,7 +377,7 @@ class SecureMonitor:
 
     def run(self):
         if not self.launch(): return
-        log(f"🚀 Systems Go. Workers: {NUM_WORKERS}. Max Runtime: 5h 50m")
+        log(f"🚀 Started. Workers: {NUM_WORKERS}. Max Runtime: 5h 50m")
         
         threading.Thread(target=self._storage_worker, daemon=True).start()
         for _ in range(NUM_WORKERS):
@@ -383,7 +393,7 @@ class SecureMonitor:
         
         self.running = False
         if self.browser: self.browser.quit()
-        log("👋 Service Shutdown Complete.")
+        log("👋 Service Shutdown.")
 
 if __name__ == "__main__":
     monitor = SecureMonitor()
