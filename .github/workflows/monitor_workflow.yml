@@ -1,0 +1,55 @@
+name: Secure Monitor Service
+
+on:
+  workflow_dispatch:  # Allows manual triggering
+  schedule:
+    # Runs every 6 hours (00:00, 06:00, 12:00, 18:00)
+    # The python script runs for 5h 50m, so this restarts it automatically.
+    - cron: '0 */6 * * *'
+
+# This ensures only ONE instance of this specific workflow runs at a time.
+# If a new one starts (via Cron or Manual), the old one is cancelled/killed.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    
+    # Max GitHub Actions timeout is 6 hours (360 mins)
+    timeout-minutes: 360 
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Google Chrome
+      run: |
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+
+    - name: Install Xvfb (Virtual Display)
+      run: sudo apt-get install -y xvfb
+
+    - name: Install Python Dependencies
+      run: |
+        pip install requests DrissionPage
+
+    - name: Run Secure Monitor
+      env:
+        S_KEY_1: ${{ secrets.S_KEY_1 }}
+        S_KEY_2: ${{ secrets.S_KEY_2 }}
+        A_ID: ${{ secrets.A_ID }}
+        COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
+      run: |
+        # xvfb-run creates a virtual screen so the script thinks it has a display
+        # "python -u" ensures logs are printed immediately (unbuffered)
+        xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" python -u secure_runner.py
