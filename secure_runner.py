@@ -19,19 +19,16 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 # 🔐 SECURE CONFIGURATION (Obfuscated)
 # ==========================================
 
-# Force unbuffered output for GitHub Actions logs
 sys.stdout.reconfigure(encoding='utf-8')
 
 def d(s):
     return base64.b64decode(s).decode('utf-8')
 
-# Load Secrets
 TOKEN_1 = os.environ.get("S_KEY_1")
 TOKEN_2 = os.environ.get("S_KEY_2")
 ADMIN_ID = os.environ.get("A_ID")
 RAW_COOKIES = os.environ.get("COOKIES_JSON")
 
-# Obfuscated Strings
 DOMAIN_ENC = "d3d3LnNoZWluaW5kaWEuaW4="
 API_CAT_ENC = "L2FwaS9jYXRlZ29yeS9zdmVyc2UtNTkzOS0zNzk2MQ=="
 API_P_ENC = "L2FwaS9wLw=="
@@ -41,14 +38,13 @@ CAT_API = d(API_CAT_ENC)
 PROD_API = d(API_P_ENC)
 
 SESSION_DB_PATH = "secure_session.db"
-CHECK_INTERVAL = 0.05
+CHECK_INTERVAL = 0.05  # ⚡ ULTRA FAST
 COOKIE_FILE = "runtime_auth.json"
 NUM_WORKERS = 50 
 BURST_THRESHOLD = 15
 
-# Runtime Limit: 5 Hours 50 Minutes (in seconds)
-# Script will auto-stop after this time to allow GitHub to restart it.
-MAX_RUNTIME = 5 * 3600 + 50 * 60  # 21000 seconds
+# 5 Hours 50 Minutes Limit
+MAX_RUNTIME = 5 * 3600 + 50 * 60 
 
 URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
 URL_PARAMS_W = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance%3Agenderfilter%3AWomen&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=genderfilter%3AWomen&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
@@ -69,9 +65,7 @@ tg_session.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=2
 # ==========================================
 
 def log(msg):
-    """Secure logger that flushes immediately for GitHub"""
-    try:
-        print(msg, flush=True)
+    try: print(msg, flush=True)
     except: pass
 
 def send_signal(message, token, image_url=None, button_url=None):
@@ -113,10 +107,13 @@ class SecureMonitor:
         self.q = queue.Queue()
         self.db_q = queue.Queue()
         self.cache = set()
-        self.start_ts = time.time() # Track Start Time
+        self.start_ts = time.time()
         
+        # 🔥 RAM LOGIC: Clear DB on Start for Fresh Session
         if os.path.exists(SESSION_DB_PATH):
-            try: os.remove(SESSION_DB_PATH)
+            try:
+                os.remove(SESSION_DB_PATH)
+                log("🗑️ Old Session Cleared. Starting Fresh RAM Session.")
             except: pass
         self.init_storage()
 
@@ -128,10 +125,9 @@ class SecureMonitor:
             except: pass
 
     def check_time(self):
-        """Checks if runtime exceeded 5h 50m"""
         elapsed = time.time() - self.start_ts
         if elapsed > MAX_RUNTIME:
-            log(f"🛑 Time Limit Reached ({int(elapsed/60)} mins). Initiating graceful exit for restart.")
+            log(f"🛑 Time Limit Reached ({int(elapsed/60)} mins). Exiting for restart.")
             self.running = False
             return False
         return True
@@ -215,7 +211,9 @@ class SecureMonitor:
         try: return tab.run_js(js, timeout=12)
         except: return None
 
+    # 🔥 BURST LOGIC: Sends "FAST ALERT"
     def fast_alert(self, items, token):
+        log(f"⚡ BURST MODE: Sending {len(items)} fast alerts...")
         for p in items:
             try:
                 pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
@@ -223,7 +221,9 @@ class SecureMonitor:
                 link = f"https://{BASE_DOMAIN}/p/{pid}"
                 img = p.get('url', '')
                 if 'images' in p and p['images']: img = p['images'][0].get('url')
-                msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>"
+                
+                # Burst Message Body
+                msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>\n<i>Fetching details...</i>"
                 send_signal(msg, token, image_url=img, button_url=link)
                 time.sleep(0.1)
             except: pass
@@ -232,7 +232,6 @@ class SecureMonitor:
         while self.running:
             try:
                 task = self.q.get(timeout=1)
-                # Unpack and process
                 full_d = None
                 api_url = f"https://{BASE_DOMAIN}{PROD_API}{task['id']}?fields=SITE"
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
@@ -255,6 +254,7 @@ class SecureMonitor:
                    data['images'][0]['url']
         except: return None
 
+    # 🔥 ALERT LOGIC: Matches Standalone Titles
     def compose_alert(self, pid, data, burst, tkn, b_data):
         try:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
@@ -281,7 +281,10 @@ class SecureMonitor:
                 except: img = None
                 stk_txt = "⚠️ Details Fetch Failed"
 
+            # Logic: If Burst ran (<=15), this is "STOCK INFO" (2nd msg).
+            # If Burst skipped (>15), this is "NEW ARRIVAL" (1st msg).
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
+            
             msg = f"{head}\n\nDf <b>{name}</b>\n💰 <b>{price}</b>\n\n📏 <b>Status:</b>\n<pre>{stk_txt}</pre>\n\n⚡ Time: {ts}"
             send_signal(msg, tkn, image_url=img, button_url=link)
             log(f"✅ Alert Sent: {pid}")
@@ -289,46 +292,77 @@ class SecureMonitor:
 
     def scanner(self, cat_key):
         cfg = CATEGORY_CONFIGS[cat_key]
+        base_url = cfg['url']
+        
         while self.running:
-            if not self.check_time(): break # Check if 5h 50m Passed
+            if not self.check_time(): break
             
             try:
-                scan_url = re.sub(r'currentPage=\d+', 'currentPage=0', cfg['url'])
-                resp = self.js_fetch(cfg['tab'], scan_url)
+                # 1. Start with Page 0
+                first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
+                data = self.js_fetch(cfg['tab'], first_page_url)
                 
-                if resp == "403":
+                if data == "403":
                     time.sleep(5); continue
-                if not isinstance(resp, dict):
+                if not isinstance(data, dict):
                     time.sleep(1); continue
 
-                items = resp.get('products', [])
-                new_batch = []
-                for p in items:
+                # 2. Get Total Pages
+                pagination = data.get('pagination', {})
+                total_pages = pagination.get('totalPages', 1)
+                
+                all_products = []
+                
+                # 3. 🔥 FULL PAGINATION LOOP (0 to Total)
+                for page_num in range(total_pages):
+                    if page_num == 0:
+                        page_products = data.get('products', [])
+                    else:
+                        page_url = re.sub(r'currentPage=\d+', f'currentPage={page_num}', base_url)
+                        page_data = self.js_fetch(cfg['tab'], page_url)
+                        if isinstance(page_data, dict):
+                            page_products = page_data.get('products', [])
+                        else:
+                            page_products = []
+                    
+                    all_products.extend(page_products)
+
+                # 4. Filter New Items (RAM Logic)
+                new_session_items = []
+                for p in all_products:
                     pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
                     if not pid and '/p/' in p.get('url', ''):
                         pid = p['url'].split('/p/')[1].split('.html')[0].split('?')[0]
                     if pid and self.is_new(pid):
-                        new_batch.append(p)
+                        new_session_items.append(p)
 
-                cnt = len(new_batch)
-                if cnt > 0:
-                    log(f"✨ [{cat_key}] Detected {cnt}")
-                    do_burst = cnt <= BURST_THRESHOLD
-                    token_pairs = [(p, resolve_token(cat_key, p)) for p in new_batch]
+                count = len(new_session_items)
+                if count > 0:
+                    log(f"✨ [{cat_key}] Detected {count} items (Scanned {total_pages} pages)")
+                    
+                    # 5. 🔥 BURST LOGIC SWITCH
+                    do_burst = count <= BURST_THRESHOLD
+                    
+                    token_pairs = [(p, resolve_token(cat_key, p)) for p in new_session_items]
 
                     if do_burst:
+                        # Case 1: Less items -> Send Fast Alert FIRST
                         t1_items = [x[0] for x in token_pairs if x[1] == TOKEN_1]
                         t2_items = [x[0] for x in token_pairs if x[1] == TOKEN_2]
                         if t1_items: threading.Thread(target=self.fast_alert, args=(t1_items, TOKEN_1)).start()
                         if t2_items: threading.Thread(target=self.fast_alert, args=(t2_items, TOKEN_2)).start()
+                    else:
+                        # Case 2: Many items -> Skip Fast Alert, only Detailed
+                        log(f"⚠️ Large Batch ({count}). Skipping Burst to avoid spam.")
 
                     for p, tkn in token_pairs:
                         pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
+                        # 'burst': do_burst tells worker which title to use
                         self.q.put({'id': pid, 'cat': cat_key, 'burst': do_burst, 'base': p, 'tkn': tkn})
 
                 time.sleep(CHECK_INTERVAL)
             except Exception as e:
-                log(f"❌ Scanner Error: {e}")
+                log(f"❌ Scanner Error [{cat_key}]: {e}")
                 time.sleep(2)
 
     def run(self):
