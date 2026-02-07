@@ -30,9 +30,8 @@ TOKEN_2 = os.environ.get("S_KEY_2")
 ADMIN_ID = os.environ.get("A_ID")
 RAW_COOKIES = os.environ.get("COOKIES_JSON")
 
-# Check Credentials at Startup
 if not TOKEN_1 or not TOKEN_2 or not ADMIN_ID:
-    print("❌ CRITICAL ERROR: Telegram Tokens or Admin ID missing in Secrets!", flush=True)
+    print("❌ CRITICAL: Tokens missing.", flush=True)
 
 DOMAIN_ENC = "d3d3LnNoZWluaW5kaWEuaW4="
 API_CAT_ENC = "L2FwaS9jYXRlZ29yeS9zdmVyc2UtNTkzOS0zNzk2MQ=="
@@ -46,10 +45,9 @@ SESSION_DB_PATH = "secure_session.db"
 CHECK_INTERVAL = 0.05
 COOKIE_FILE = "runtime_auth.json"
 
-# 🔥 OPTIMIZED FOR GITHUB SERVER (Prevent Crashing)
+# Safe Workers Count
 NUM_WORKERS = 30  
 BURST_THRESHOLD = 15
-
 MAX_RUNTIME = 5 * 3600 + 50 * 60 
 
 URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
@@ -75,9 +73,7 @@ def log(msg):
     except: pass
 
 def send_signal(message, token, image_url=None, button_url=None):
-    if not token or not ADMIN_ID:
-        log("❌ Signal Failed: Missing Token or Admin ID")
-        return
+    if not token or not ADMIN_ID: return
     try:
         payload = {"chat_id": ADMIN_ID, "parse_mode": "HTML"}
         if button_url:
@@ -92,13 +88,9 @@ def send_signal(message, token, image_url=None, button_url=None):
             payload["text"] = message
             payload["disable_web_page_preview"] = False
         
-        # Increased timeout for stability
-        resp = tg_session.post(url, data=payload, timeout=45)
-        if resp.status_code != 200:
-            log(f"⚠️ TG API Error: {resp.text}")
-
+        tg_session.post(url, data=payload, timeout=45)
     except Exception as e:
-        log(f"⚠️ Signal Network Error: {e}")
+        log(f"⚠️ Signal Error: {e}")
 
 def resolve_token(cat_name, p_data):
     if cat_name == 'TypeB': return TOKEN_1
@@ -121,11 +113,10 @@ class SecureMonitor:
         self.cache = set()
         self.start_ts = time.time()
         
-        # 🔥 RAM LOGIC: Fresh Start
         if os.path.exists(SESSION_DB_PATH):
             try:
                 os.remove(SESSION_DB_PATH)
-                log("🗑️ RAM Cleared: Starting Fresh Session.")
+                log("🗑️ RAM Cleared.")
             except: pass
         self.init_storage()
 
@@ -181,6 +172,8 @@ class SecureMonitor:
         co.set_argument('--disable-dev-shm-usage')
         co.set_argument('--disable-gpu')
         co.set_argument('--mute-audio')
+        # Use a real User-Agent to reduce 403s
+        co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         co.set_argument('--blink-settings=imagesEnabled=false')
         return co
 
@@ -197,13 +190,15 @@ class SecureMonitor:
                 with open(COOKIE_FILE, 'r') as f:
                     c_data = json.load(f)
                     self.browser.get(home)
+                    time.sleep(1) # Wait for initial load
                     self.browser.set.cookies(c_data)
                     self.browser.refresh()
-                    time.sleep(2)
-                    log("✅ Auth Success.")
+                    time.sleep(3) # Increased wait for auth to stabilize
+                    log("✅ Auth Injected.")
             except Exception as e:
                 log(f"⚠️ Auth Error: {e}")
 
+        # Setup tabs after cookies are set on the main instance
         CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
         for cat in ['TypeA', 'TypeB']:
             CATEGORY_CONFIGS[cat]['tab'] = self.browser.new_tab(home)
@@ -223,7 +218,7 @@ class SecureMonitor:
         try: return tab.run_js(js, timeout=12)
         except: return None
 
-    # 🔥 BURST (Basic Info)
+    # BURST ALERT (Basic)
     def fast_alert(self, items, token):
         log(f"⚡ Bursting {len(items)} items...")
         for p in items:
@@ -231,15 +226,23 @@ class SecureMonitor:
                 pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
                 name = p.get('name', 'New Item')
                 link = f"https://{BASE_DOMAIN}/p/{pid}"
-                img = p.get('url', '')
-                if 'images' in p and p['images']: img = p['images'][0].get('url')
+                img = self.extract_basic_img(p)
                 
                 msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>\n<i>Fetching details...</i>"
                 send_signal(msg, token, image_url=img, button_url=link)
-                time.sleep(0.1) # Safe throttle
+                time.sleep(0.1)
             except: pass
 
-    # 🔥 DETAILED PROCESSOR
+    def extract_basic_img(self, p):
+        try:
+            if 'images' in p and len(p['images']) > 0:
+                return p['images'][0].get('url')
+            if 'fnlColorVariantData' in p:
+                return p['fnlColorVariantData'].get('outfitPictureURL')
+        except: pass
+        return None
+
+    # DETAILED WORKER
     def _processor(self):
         while self.running:
             try:
@@ -249,35 +252,43 @@ class SecureMonitor:
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
                 use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
                 
-                # Robust Retry
                 for _ in range(5):
                     full_d = self.js_fetch(use_tab, api_url)
                     if isinstance(full_d, dict): break
-                    time.sleep(1.5)
+                    # If 403, wait longer random time to cool down
+                    if full_d == "403": time.sleep(random.uniform(2, 4))
+                    else: time.sleep(1.5)
                 
-                # Proceed even if fetch failed (send basic data)
+                # Strict check: If not dict, treat as None (Failed)
+                if not isinstance(full_d, dict):
+                    full_d = None
+                
                 self.compose_alert(task['id'], full_d, task['burst'], task['tkn'], task['base'])
                 self.q.task_done()
             except queue.Empty: continue
             except Exception as e:
                 log(f"❌ Worker Error: {e}")
 
-    def get_img(self, data):
+    def get_detailed_img(self, data):
         try:
             return data.get('selected', {}).get('modelImage', {}).get('url') or \
                    data['baseOptions'][0]['options'][0]['modelImage']['url'] or \
                    data['images'][0]['url']
         except: return None
 
+    # ROBUST COMPOSE ALERT (CRASH FIX)
     def compose_alert(self, pid, data, burst, tkn, b_data):
         try:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
             ts = datetime.now().strftime('%H:%M:%S')
-            if data:
+            
+            # 1. PRIMARY: USE DETAILED DATA (Must be dict)
+            if isinstance(data, dict):
                 name = data.get('name', 'Item')
                 price_d = data.get('offerPrice') or data.get('price')
                 price = f"₹{int(price_d['value'])}" if price_d and price_d.get('value') else "N/A"
-                img = self.get_img(data)
+                img = self.get_detailed_img(data)
+                
                 s_list = []
                 for v in data.get('variantOptions', []):
                     qs = v.get('variantOptionQualifiers', [])
@@ -288,19 +299,27 @@ class SecureMonitor:
                     elif stat == 'inStock': s_list.append(f"✅ <b>{sz}</b> : In Stock")
                     else: s_list.append(f"❌ {sz} : Out")
                 stk_txt = "\n".join(s_list) if s_list else "⚠️ Stock Check"
-            else:
+
+            # 2. FALLBACK: USE BASIC DATA (Must be dict)
+            elif isinstance(b_data, dict):
                 name = b_data.get('name', 'Item')
                 price = "Check Link"
-                try: img = b_data['images'][0]['url']
-                except: img = None
-                stk_txt = "⚠️ Details Fetch Failed"
+                img = self.extract_basic_img(b_data)
+                # If data was None, it means fetch failed (403 or Network)
+                stk_txt = "⚠️ Details Fetch Failed (Server Busy)"
+            
+            else:
+                log(f"❌ Skipping {pid}: Data invalid.")
+                return
 
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
-            
             msg = f"{head}\n\nDf <b>{name}</b>\n💰 <b>{price}</b>\n\n📏 <b>Status:</b>\n<pre>{stk_txt}</pre>\n\n⚡ Time: {ts}"
+            
             send_signal(msg, tkn, image_url=img, button_url=link)
             log(f"✅ Alert Sent: {pid}")
+
         except Exception as e:
+            # Catch any other unforeseen error to prevent crash
             log(f"❌ Alert Gen Error: {e}")
 
     def scanner(self, cat_key):
@@ -311,7 +330,6 @@ class SecureMonitor:
             if not self.check_time(): break
             
             try:
-                # 1. Page 0 Scan
                 first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
                 data = self.js_fetch(cfg['tab'], first_page_url)
                 
@@ -320,13 +338,10 @@ class SecureMonitor:
                 if not isinstance(data, dict):
                     time.sleep(1); continue
 
-                # 2. Pagination Logic
                 pagination = data.get('pagination', {})
                 total_pages = pagination.get('totalPages', 1)
                 
                 all_products = []
-                
-                # 3. Collect ALL Items (Page 0 to N)
                 for page_num in range(total_pages):
                     if page_num == 0:
                         page_products = data.get('products', [])
@@ -337,10 +352,8 @@ class SecureMonitor:
                             page_products = page_data.get('products', [])
                         else:
                             page_products = []
-                    
                     all_products.extend(page_products)
 
-                # 4. Filter New
                 new_session_items = []
                 for p in all_products:
                     pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
@@ -356,16 +369,14 @@ class SecureMonitor:
                     do_burst = count <= BURST_THRESHOLD
                     token_pairs = [(p, resolve_token(cat_key, p)) for p in new_session_items]
 
-                    # BURST (Fast Messages)
                     if do_burst:
                         t1_items = [x[0] for x in token_pairs if x[1] == TOKEN_1]
                         t2_items = [x[0] for x in token_pairs if x[1] == TOKEN_2]
                         if t1_items: threading.Thread(target=self.fast_alert, args=(t1_items, TOKEN_1)).start()
                         if t2_items: threading.Thread(target=self.fast_alert, args=(t2_items, TOKEN_2)).start()
                     else:
-                        log(f"⚠️ Large Batch ({count}). Sending Detailed Alerts Directly.")
+                        log(f"⚠️ Large Batch ({count}). Direct Queue.")
 
-                    # QUEUE (Detailed Messages - ALWAYS RUNS)
                     for p, tkn in token_pairs:
                         pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
                         self.q.put({'id': pid, 'cat': cat_key, 'burst': do_burst, 'base': p, 'tkn': tkn})
@@ -393,7 +404,7 @@ class SecureMonitor:
         
         self.running = False
         if self.browser: self.browser.quit()
-        log("👋 Service Shutdown.")
+        log("👋 Shutdown.")
 
 if __name__ == "__main__":
     monitor = SecureMonitor()
