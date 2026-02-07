@@ -45,10 +45,14 @@ SESSION_DB_PATH = "secure_session.db"
 CHECK_INTERVAL = 0.05
 COOKIE_FILE = "runtime_auth.json"
 
-# Safe Workers Count
-NUM_WORKERS = 30  
+# 🔥 OPTIMIZED SPEED SETTINGS
+# 25 is the Sweet Spot for GHA. 50 chokes the CPU, 10 is too slow.
+NUM_WORKERS = 25  
 BURST_THRESHOLD = 15
 MAX_RUNTIME = 5 * 3600 + 50 * 60 
+
+# Explicit User Agent for Consistency
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
 URL_PARAMS_W = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance%3Agenderfilter%3AWomen&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=genderfilter%3AWomen&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
@@ -113,10 +117,11 @@ class SecureMonitor:
         self.cache = set()
         self.start_ts = time.time()
         
+        # Fresh Session Logic (RAM)
         if os.path.exists(SESSION_DB_PATH):
             try:
                 os.remove(SESSION_DB_PATH)
-                log("🗑️ RAM Cleared.")
+                log("🗑️ RAM Cleared: Starting Fresh.")
             except: pass
         self.init_storage()
 
@@ -172,8 +177,7 @@ class SecureMonitor:
         co.set_argument('--disable-dev-shm-usage')
         co.set_argument('--disable-gpu')
         co.set_argument('--mute-audio')
-        # Use a real User-Agent to reduce 403s
-        co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        co.set_argument(f'--user-agent={USER_AGENT}')
         co.set_argument('--blink-settings=imagesEnabled=false')
         return co
 
@@ -190,25 +194,42 @@ class SecureMonitor:
                 with open(COOKIE_FILE, 'r') as f:
                     c_data = json.load(f)
                     self.browser.get(home)
-                    time.sleep(1) # Wait for initial load
+                    time.sleep(1) 
                     self.browser.set.cookies(c_data)
                     self.browser.refresh()
-                    time.sleep(3) # Increased wait for auth to stabilize
+                    time.sleep(3) 
                     log("✅ Auth Injected.")
             except Exception as e:
                 log(f"⚠️ Auth Error: {e}")
 
-        # Setup tabs after cookies are set on the main instance
+        # WARM UP TABS (Crucial for Speed)
         CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
         for cat in ['TypeA', 'TypeB']:
-            CATEGORY_CONFIGS[cat]['tab'] = self.browser.new_tab(home)
+            t = self.browser.new_tab(home)
+            CATEGORY_CONFIGS[cat]['tab'] = t
             time.sleep(0.5)
         return True
 
     def js_fetch(self, tab, url):
+        # 🔥 ULTRA SECURE FETCH (Mimics Real User to Avoid 403)
+        # We inject headers that make it look exactly like a browser request
         js = f"""
             return fetch("{url}&_t=" + Date.now(), {{
-                headers: {{'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}}
+                method: 'GET',
+                headers: {{
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"Windows"',
+                    'Sec-Fetch-Dest': 'empty',
+                    'Sec-Fetch-Mode': 'cors',
+                    'Sec-Fetch-Site': 'same-origin',
+                    'User-Agent': '{USER_AGENT}',
+                    'Referer': 'https://{BASE_DOMAIN}/'
+                }}
             }}).then(res => {{
                 if(res.status === 403) return "403";
                 if(!res.ok) return "ERR_" + res.status;
@@ -230,7 +251,7 @@ class SecureMonitor:
                 
                 msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>\n<i>Fetching details...</i>"
                 send_signal(msg, token, image_url=img, button_url=link)
-                time.sleep(0.1)
+                time.sleep(0.05)
             except: pass
 
     def extract_basic_img(self, p):
@@ -252,14 +273,20 @@ class SecureMonitor:
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
                 use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
                 
-                for _ in range(5):
+                # Aggressive Retry Strategy (6 tries)
+                for attempt in range(6):
                     full_d = self.js_fetch(use_tab, api_url)
-                    if isinstance(full_d, dict): break
-                    # If 403, wait longer random time to cool down
-                    if full_d == "403": time.sleep(random.uniform(2, 4))
-                    else: time.sleep(1.5)
+                    
+                    if isinstance(full_d, dict): 
+                        break # Success!
+                    
+                    # Smart Backoff: Wait only if blocked
+                    if full_d == "403": 
+                        time.sleep(random.uniform(2, 4))
+                    else: 
+                        time.sleep(1) # Network glitch, retry fast
                 
-                # Strict check: If not dict, treat as None (Failed)
+                # CRASH FIX: Ensure full_d is None if it's still a string
                 if not isinstance(full_d, dict):
                     full_d = None
                 
@@ -276,13 +303,13 @@ class SecureMonitor:
                    data['images'][0]['url']
         except: return None
 
-    # ROBUST COMPOSE ALERT (CRASH FIX)
+    # ROBUST ALERT GENERATOR
     def compose_alert(self, pid, data, burst, tkn, b_data):
         try:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
             ts = datetime.now().strftime('%H:%M:%S')
             
-            # 1. PRIMARY: USE DETAILED DATA (Must be dict)
+            # 1. PRIMARY: USE DETAILED DATA
             if isinstance(data, dict):
                 name = data.get('name', 'Item')
                 price_d = data.get('offerPrice') or data.get('price')
@@ -300,16 +327,15 @@ class SecureMonitor:
                     else: s_list.append(f"❌ {sz} : Out")
                 stk_txt = "\n".join(s_list) if s_list else "⚠️ Stock Check"
 
-            # 2. FALLBACK: USE BASIC DATA (Must be dict)
+            # 2. FALLBACK: USE BASIC DATA
             elif isinstance(b_data, dict):
                 name = b_data.get('name', 'Item')
                 price = "Check Link"
                 img = self.extract_basic_img(b_data)
-                # If data was None, it means fetch failed (403 or Network)
-                stk_txt = "⚠️ Details Fetch Failed (Server Busy)"
+                stk_txt = "⚠️ Details Fetch Failed (API Blocked)"
             
             else:
-                log(f"❌ Skipping {pid}: Data invalid.")
+                log(f"❌ Skipping {pid}: Invalid Data.")
                 return
 
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
@@ -319,7 +345,6 @@ class SecureMonitor:
             log(f"✅ Alert Sent: {pid}")
 
         except Exception as e:
-            # Catch any other unforeseen error to prevent crash
             log(f"❌ Alert Gen Error: {e}")
 
     def scanner(self, cat_key):
@@ -330,6 +355,7 @@ class SecureMonitor:
             if not self.check_time(): break
             
             try:
+                # 1. Page 0 Scan
                 first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
                 data = self.js_fetch(cfg['tab'], first_page_url)
                 
@@ -342,6 +368,7 @@ class SecureMonitor:
                 total_pages = pagination.get('totalPages', 1)
                 
                 all_products = []
+                # 2. FULL PAGINATION LOOP
                 for page_num in range(total_pages):
                     if page_num == 0:
                         page_products = data.get('products', [])
