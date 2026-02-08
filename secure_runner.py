@@ -8,81 +8,97 @@ import re
 import requests
 import sqlite3
 import tempfile
-import base64
 import sys
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from DrissionPage import ChromiumPage, ChromiumOptions
-from DrissionPage.errors import BrowserConnectError
 
 # ==========================================
-# 🔐 SECURE CONFIGURATION
+# ⚙️ CORE CONFIGURATION
 # ==========================================
 
-sys.stdout.reconfigure(encoding='utf-8')
+# Platform Tokens (From Secrets)
+TOKEN_CHANNEL_A = os.environ.get("TOKEN_CHANNEL_A")
+TOKEN_CHANNEL_B = os.environ.get("TOKEN_CHANNEL_B")
+TARGET_CHAT = os.environ.get("TARGET_CHAT")
 
-def d(s):
-    return base64.b64decode(s).decode('utf-8')
+# Paths & Settings
+SESSION_STORE = "runtime_session.db"
+INTERVAL_CHECK = 0.05
+AUTH_DATA = os.environ.get("AUTH_DATA")
+HEADLESS_ENABLED = True
+WORKER_COUNT = 50
+BATCH_THRESHOLD = 15
 
-# Secrets Load
-TOKEN_1 = os.environ.get("S_KEY_1")
-TOKEN_2 = os.environ.get("S_KEY_2")
-ADMIN_ID = os.environ.get("A_ID")
-RAW_COOKIES = os.environ.get("COOKIES_JSON")
+# Endpoint Configurations
+BASE_DOMAIN = os.environ.get("BASE_DOMAIN")
 
-if not TOKEN_1 or not TOKEN_2 or not ADMIN_ID:
-    print("❌ CRITICAL: Tokens missing.", flush=True)
-
-DOMAIN_ENC = "d3d3LnNoZWluaW5kaWEuaW4="
-API_CAT_ENC = "L2FwaS9jYXRlZ29yeS9zdmVyc2UtNTkzOS0zNzk2MQ=="
-API_P_ENC = "L2FwaS9wLw=="
-
-BASE_DOMAIN = d(DOMAIN_ENC)
-CAT_API = d(API_CAT_ENC)
-PROD_API = d(API_P_ENC)
-
-SESSION_DB_PATH = "secure_session.db"
-CHECK_INTERVAL = 0.05
-COOKIE_FILE = "runtime_auth.json"
-
-# 🔥 WORKER SETTINGS
-# 20 Workers + Jitter = Best Stability on GHA
-NUM_WORKERS = 20  
-BURST_THRESHOLD = 15
-MAX_RUNTIME = 5 * 3600 + 50 * 60 
-
-# Real User Agent (Matches Windows Chrome)
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-
-URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
-URL_PARAMS_W = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance%3Agenderfilter%3AWomen&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=genderfilter%3AWomen&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
-URL_PARAMS_M = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance%3Agenderfilter%3AMen&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=genderfilter%3AMen&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
-
-CATEGORY_CONFIGS = {
-    'Universal': {'url': f"https://{BASE_DOMAIN}{CAT_API}{URL_PARAMS_UNI}", 'tab': None},
-    'TypeA':     {'url': f"https://{BASE_DOMAIN}{CAT_API}{URL_PARAMS_W}", 'tab': None}, 
-    'TypeB':     {'url': f"https://{BASE_DOMAIN}{CAT_API}{URL_PARAMS_M}", 'tab': None}  
+ENDPOINT_MAP = {
+    'Category_A': {
+        'endpoint': os.environ.get("ENDPOINT_CATEGORY_A"),
+        'tab': None
+    },
+    'Category_B': {
+        'endpoint': os.environ.get("ENDPOINT_CATEGORY_B"),
+        'tab': None
+    },
+    'Category_C': {
+        'endpoint': os.environ.get("ENDPOINT_CATEGORY_C"),
+        'tab': None
+    }
 }
 
-tg_session = requests.Session()
-retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-tg_session.mount('https://', HTTPAdapter(max_retries=retries, pool_connections=100, pool_maxsize=100))
+# Session Handler
+msg_session = requests.Session()
+retry_config = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+msg_session.mount('https://', HTTPAdapter(max_retries=retry_config, pool_connections=200, pool_maxsize=200))
 
 # ==========================================
 # 🛠️ UTILITY FUNCTIONS
 # ==========================================
 
-def log(msg):
-    try: print(msg, flush=True)
-    except: pass
+def log_info(message):
+    """Enhanced logging with timestamp"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] ℹ️  {message}")
+    sys.stdout.flush()
 
-def send_signal(message, token, image_url=None, button_url=None):
-    if not token or not ADMIN_ID: return
+def log_error(message, exception=None):
+    """Error logging with exception details"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    error_msg = f"[{timestamp}] ❌ {message}"
+    if exception:
+        error_msg += f" | Exception: {str(exception)}"
+    print(error_msg)
+    sys.stdout.flush()
+
+def log_success(message):
+    """Success logging"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] ✅ {message}")
+    sys.stdout.flush()
+
+def log_warning(message):
+    """Warning logging"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] ⚠️  {message}")
+    sys.stdout.flush()
+
+def send_notification(message, token, image_url=None, action_url=None):
+    """Send message via Telegram API"""
     try:
-        payload = {"chat_id": ADMIN_ID, "parse_mode": "HTML"}
-        if button_url:
-            payload["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": "🛍️ VIEW ITEM", "url": button_url}]]})
+        payload = {
+            "chat_id": TARGET_CHAT,
+            "parse_mode": "HTML"
+        }
+
+        if action_url:
+            payload["reply_markup"] = json.dumps({
+                "inline_keyboard": [[
+                    {"text": "🛍️ VIEW ITEM", "url": action_url}
+                ]]
+            })
 
         if image_url:
             url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -92,381 +108,539 @@ def send_signal(message, token, image_url=None, button_url=None):
             url = f"https://api.telegram.org/bot{token}/sendMessage"
             payload["text"] = message
             payload["disable_web_page_preview"] = False
-        
-        tg_session.post(url, data=payload, timeout=45)
+
+        resp = msg_session.post(url, data=payload, timeout=30)
+
+        if resp.status_code == 200:
+            log_success(f"Notification sent successfully")
+        else:
+            log_error(f"Notification failed with status {resp.status_code}")
+
     except Exception as e:
-        log(f"⚠️ Signal Error: {e}")
+        log_error("Notification dispatch failed", e)
 
-def resolve_token(cat_name, p_data):
-    if cat_name == 'TypeB': return TOKEN_1
-    elif cat_name == 'TypeA': return TOKEN_2
+def determine_token(category, item_data):
+    """Route notification to appropriate channel"""
+    if category == 'Category_C':
+        return TOKEN_CHANNEL_A
+    elif category == 'Category_B':
+        return TOKEN_CHANNEL_B
     else:
-        seg = p_data.get('segmentNameText', '').lower()
-        if 'men' in seg and 'women' not in seg: return TOKEN_1
-        return TOKEN_2
+        segment = item_data.get('segmentNameText', '').lower()
+        if 'women' in segment:
+            return TOKEN_CHANNEL_B
+        elif 'men' in segment:
+            return TOKEN_CHANNEL_A
+        return TOKEN_CHANNEL_B
 
 # ==========================================
-# 🚀 SECURE MONITOR CORE
+# 🚀 MONITOR ENGINE
 # ==========================================
 
-class SecureMonitor:
+class AutomationEngine:
     def __init__(self):
+        log_info("Initializing Automation Engine...")
         self.browser = None
-        self.running = True
-        self.q = queue.Queue()
-        self.db_q = queue.Queue()
-        self.cache = set()
-        self.start_ts = time.time()
-        
-        # FRESH START
-        if os.path.exists(SESSION_DB_PATH):
+        self.active = True
+        self.detail_queue = queue.Queue()
+        self.db_queue = queue.Queue()
+        self.memory_cache = set()
+
+        # Clean previous session
+        if os.path.exists(SESSION_STORE):
             try:
-                os.remove(SESSION_DB_PATH)
-                log("🗑️ RAM Cleared.")
-            except: pass
-        self.init_storage()
+                os.remove(SESSION_STORE)
+                log_info("Previous session data cleared")
+            except Exception as e:
+                log_error("Failed to clear session data", e)
 
-        if RAW_COOKIES:
-            try:
-                # Basic validation
-                json.loads(RAW_COOKIES)
-                with open(COOKIE_FILE, 'w') as f:
-                    f.write(RAW_COOKIES)
-                log("🍪 Cookies Prepared.")
-            except: 
-                log("❌ Invalid Cookie JSON!")
+        self.setup_database()
+        log_success("Session system initialized")
 
-    def check_time(self):
-        elapsed = time.time() - self.start_ts
-        if elapsed > MAX_RUNTIME:
-            log(f"🛑 Time Limit Reached. Restarting...")
-            self.running = False
-            return False
-        return True
-
-    def init_storage(self):
+    def setup_database(self):
+        """Initialize SQLite database"""
         try:
-            conn = sqlite3.connect(SESSION_DB_PATH)
-            conn.cursor().execute("CREATE TABLE IF NOT EXISTS seen_items (pid TEXT PRIMARY KEY)")
+            conn = sqlite3.connect(SESSION_STORE)
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS tracked_items (item_id TEXT PRIMARY KEY)")
             conn.commit()
             conn.close()
-        except: pass
+            log_success("Database schema ready")
+        except Exception as e:
+            log_error("Database initialization failed", e)
 
-    def _storage_worker(self):
-        conn = sqlite3.connect(SESSION_DB_PATH, check_same_thread=False)
-        try: conn.execute("PRAGMA journal_mode=WAL;")
-        except: pass
-        while self.running:
+    def _database_writer(self):
+        """Background thread for database writes"""
+        conn = sqlite3.connect(SESSION_STORE, check_same_thread=False)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            log_info("Database WAL mode enabled")
+        except Exception as e:
+            log_warning(f"WAL mode setup issue: {e}")
+
+        while self.active:
             try:
-                pid = self.db_q.get(timeout=1)
+                item_id = self.db_queue.get(timeout=1)
                 try:
-                    conn.execute("INSERT OR IGNORE INTO seen_items (pid) VALUES (?)", (pid,))
+                    conn.execute("INSERT OR IGNORE INTO tracked_items (item_id) VALUES (?)", (item_id,))
                     conn.commit()
-                except: pass
-                self.db_q.task_done()
-            except queue.Empty: continue
-        conn.close()
+                except Exception as e:
+                    log_error(f"DB write error for {item_id}", e)
+                self.db_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                log_error("Database writer thread error", e)
 
-    def is_new(self, pid):
-        if pid in self.cache: return False
-        self.cache.add(pid)
-        self.db_q.put(pid)
+        conn.close()
+        log_info("Database writer thread stopped")
+
+    def is_new_item(self, item_id):
+        """Check if item is new and mark as seen"""
+        if item_id in self.memory_cache:
+            return False
+
+        self.memory_cache.add(item_id)
+        self.db_queue.put(item_id)
         return True
 
-    def get_opts(self, port, force_headless=False):
+    def get_browser_config(self, port, headless=HEADLESS_ENABLED):
+        """Configure browser options"""
+        log_info(f"Configuring browser on port {port} (headless={headless})")
         co = ChromiumOptions()
         co.set_local_port(port)
-        co.set_user_data_path(os.path.join(tempfile.gettempdir(), f"secure_profile_{port}"))
-        
-        # Stability Flags for Linux/GHA
+        co.set_user_data_path(os.path.join(tempfile.gettempdir(), f"automation_profile_{port}"))
         co.set_argument('--no-sandbox')
         co.set_argument('--disable-dev-shm-usage')
-        co.set_argument('--disable-gpu')
-        co.set_argument('--disable-setuid-sandbox')
         co.set_argument('--mute-audio')
-        co.set_argument(f'--user-agent={USER_AGENT}')
         co.set_argument('--blink-settings=imagesEnabled=false')
-        
-        # Try to find Chrome automatically
-        chrome_paths = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium-browser"]
-        for path in chrome_paths:
-            if os.path.exists(path):
-                co.set_paths(browser_path=path)
-                break
+        co.set_argument('--disable-gpu')
 
-        if force_headless:
-            # New Headless mode is much more stable than Xvfb on GHA
-            co.set_argument('--headless=new') 
-        
+        if headless:
+            co.set_argument('--headless=new')
+
         return co
 
-    def launch(self):
-        log("🚀 Launching Secure Browser...")
-        
-        # ATTEMPT 1: Try with Display (Xvfb)
-        try:
-            port = random.randint(30001, 39999)
-            co = self.get_opts(port, force_headless=False)
-            self.browser = ChromiumPage(co)
-            log("✅ Browser Started (Standard Mode)")
-        except Exception:
-            log("⚠️ Standard Launch Failed. Switching to Headless New...")
-            # ATTEMPT 2: Headless New (Failsafe)
-            try:
-                port = random.randint(40001, 49999)
-                co = self.get_opts(port, force_headless=True)
-                self.browser = ChromiumPage(co)
-                log("✅ Browser Started (Fallback Mode)")
-            except Exception as e:
-                log(f"❌ FATAL: Browser Launch Failed. {e}")
-                return False
-        
-        home = f"https://{BASE_DOMAIN}/"
-        
-        if os.path.exists(COOKIE_FILE):
-            try:
-                self.browser.get(home)
-                time.sleep(2)
-                self.browser.clear_cookies()
-                with open(COOKIE_FILE, 'r') as f:
-                    c_data = json.load(f)
-                    self.browser.set.cookies(c_data)
-                self.browser.refresh()
-                time.sleep(3)
-                log("✅ Session Authenticated.")
-            except Exception as e:
-                log(f"⚠️ Auth Error: {e}")
+    def initialize_browser(self):
+        """Initialize browser with authentication"""
+        log_info("Starting browser initialization...")
+        port = random.randint(30001, 40000)
+        co = self.get_browser_config(port)
 
-        # Tab Setup
-        CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
-        for cat in ['TypeA', 'TypeB']:
-            t = self.browser.new_tab(home)
-            CATEGORY_CONFIGS[cat]['tab'] = t
-            time.sleep(0.5)
+        try:
+            self.browser = ChromiumPage(co)
+            log_success("Browser instance created")
+        except Exception as e:
+            log_error("Failed to create browser instance", e)
+            return False
+
+        # Load authentication data
+        if AUTH_DATA:
+            try:
+                log_info("Loading authentication credentials...")
+                auth_cookies = json.loads(AUTH_DATA)
+                self.browser.get(BASE_DOMAIN)
+                time.sleep(2)
+                self.browser.set.cookies(auth_cookies)
+                self.browser.refresh()
+                time.sleep(2)
+                log_success("Authentication cookies applied")
+            except Exception as e:
+                log_error("Authentication setup failed", e)
+                return False
+        else:
+            log_error("No authentication data provided")
+            return False
+
+        # Initialize category tabs
+        log_info("Setting up category tabs...")
+        try:
+            ENDPOINT_MAP['Category_A']['tab'] = self.browser.latest_tab
+            log_info("Primary tab assigned to Category_A")
+
+            for cat in ['Category_B', 'Category_C']:
+                ENDPOINT_MAP[cat]['tab'] = self.browser.new_tab(BASE_DOMAIN)
+                time.sleep(0.5)
+                log_info(f"New tab assigned to {cat}")
+
+            log_success("All category tabs initialized")
+        except Exception as e:
+            log_error("Tab initialization failed", e)
+            return False
+
         return True
 
-    def js_fetch(self, tab, url):
-        # High-Quality Headers to avoid 403
-        js = f"""
-            return fetch("{url}&_t=" + Date.now(), {{
-                method: 'GET',
-                headers: {{
-                    'Accept': 'application/json, text/plain, */*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                    'Sec-Ch-Ua-Mobile': '?0',
-                    'Sec-Ch-Ua-Platform': '"Windows"',
-                    'User-Agent': '{USER_AGENT}',
-                    'Referer': 'https://{BASE_DOMAIN}/'
-                }}
-            }}).then(res => {{
-                if(res.status === 403) return "403";
-                if(!res.ok) return "ERR_" + res.status;
-                return res.json();
-            }}).catch(err => "ERR_NETWORK");
+    def fetch_data_js(self, tab, url):
+        """Fetch data using JavaScript in browser context"""
+        js_script = f"""
+        return fetch("{url}&_t=" + Date.now(), {{
+            headers: {{'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}}
+        }}).then(res => {{
+            if(res.status === 403) return "403_ACCESS_DENIED";
+            if(!res.ok) return "ERROR_" + res.status;
+            return res.json();
+        }}).catch(err => "NETWORK_ERROR");
         """
-        try: return tab.run_js(js, timeout=12)
-        except: return None
 
-    # BURST ALERT (Basic)
-    def fast_alert(self, items, token):
-        log(f"⚡ Bursting {len(items)} items...")
-        for p in items:
-            try:
-                pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
-                name = p.get('name', 'New Item')
-                link = f"https://{BASE_DOMAIN}/p/{pid}"
-                img = self.extract_basic_img(p)
-                
-                msg = f"⚠️ <b>FAST ALERT</b>\n📦 {name}\n🆔 <code>{pid}</code>\n<i>Fetching details...</i>"
-                send_signal(msg, token, image_url=img, button_url=link)
-                time.sleep(0.05)
-            except: pass
-
-    # Helper to pull image from Listing JSON
-    def extract_basic_img(self, p):
         try:
-            if 'fnlColorVariantData' in p and 'outfitPictureURL' in p['fnlColorVariantData']:
-                 return p['fnlColorVariantData']['outfitPictureURL']
-            if 'images' in p and len(p['images']) > 0:
-                return p['images'][0].get('url')
-        except: pass
-        return None
+            result = tab.run_js(js_script, timeout=12)
+            return result
+        except Exception as e:
+            log_error(f"JS fetch failed: {url[:100]}...", e)
+            return None
 
-    def _processor(self):
-        while self.running:
+    def send_batch_alerts(self, items, token):
+        """Send rapid alerts for batch items"""
+        log_info(f"⚡ BATCH MODE: Processing {len(items)} items rapidly")
+
+        for item in items:
             try:
-                task = self.q.get(timeout=1)
-                full_d = None
-                api_url = f"https://{BASE_DOMAIN}{PROD_API}{task['id']}?fields=SITE"
-                tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
-                use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
-                
-                # Add jitter to prevent all workers hitting at once
-                time.sleep(random.uniform(0.1, 0.5))
+                item_id = item.get('fnlColorVariantData', {}).get('colorGroup') or item.get('code')
+                title = item.get('name', 'New Product Alert')
+                item_url = f"{BASE_DOMAIN}/p/{item_id}"
 
-                # Try fetching details
-                for attempt in range(4):
-                    full_d = self.js_fetch(use_tab, api_url)
-                    
-                    if isinstance(full_d, dict): break # Success
-                    
-                    if full_d == "403": time.sleep(random.uniform(2, 5))
-                    else: time.sleep(1)
-                
-                # CRASH FIX: Default to None if failed
-                if not isinstance(full_d, dict): full_d = None
-                
-                self.compose_alert(task['id'], full_d, task['burst'], task['tkn'], task['base'])
-                self.q.task_done()
-            except queue.Empty: continue
+                img_url = item.get('url', '')
+                if 'images' in item and len(item['images']) > 0:
+                    img_url = item['images'][0].get('url')
+
+                message = (
+                    f"⚠️ **RAPID ALERT**\n"
+                    f"📦 {title}\n"
+                    f"🆔 `{item_id}`\n\n"
+                    f"*Fetching detailed information...*"
+                )
+
+                send_notification(message, token, image_url=img_url, action_url=item_url)
+                time.sleep(0.1)
+
             except Exception as e:
-                log(f"❌ Worker Error: {e}")
+                log_error(f"Batch alert failed for item", e)
 
-    def get_detailed_img(self, data):
+    def _detail_processor(self):
+        """Worker thread for processing item details"""
+        log_info("Detail processor thread started")
+
+        while self.active:
+            try:
+                task = self.detail_queue.get(timeout=1)
+                item_id = task['id']
+                category = task['category']
+                token = task['token']
+                is_batch = task.get('is_batch', False)
+                basic_info = task.get('basic_info', {})
+
+                detail_endpoint = f"{BASE_DOMAIN}/api/p/{item_id}?fields=SITE"
+
+                # Select random tab for load balancing
+                available_tabs = [c['tab'] for c in ENDPOINT_MAP.values() if c['tab']]
+                worker_tab = random.choice(available_tabs) if available_tabs else ENDPOINT_MAP['Category_A']['tab']
+
+                # Retry mechanism with 5 attempts
+                detailed_data = None
+                for attempt in range(1, 6):
+                    log_info(f"Fetching details for {item_id} (Attempt {attempt}/5)")
+                    detailed_data = self.fetch_data_js(worker_tab, detail_endpoint)
+
+                    if isinstance(detailed_data, dict):
+                        log_success(f"Details fetched for {item_id}")
+                        break
+
+                    if attempt < 5:
+                        time.sleep(1.5)
+                        log_warning(f"Retry {attempt} failed for {item_id}, retrying...")
+
+                if isinstance(detailed_data, dict):
+                    self.format_and_dispatch(item_id, category, detailed_data, is_batch, token)
+                else:
+                    log_warning(f"All retries exhausted for {item_id}, using basic data")
+                    self.format_and_dispatch(item_id, category, None, is_batch, token, basic_info)
+
+                self.detail_queue.task_done()
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                log_error("Detail processor error", e)
+
+    def extract_primary_image(self, full_data):
+        """Extract best quality image from full data"""
         try:
-            return data.get('selected', {}).get('modelImage', {}).get('url') or \
-                   data['baseOptions'][0]['options'][0]['modelImage']['url'] or \
-                   data['images'][0]['url']
-        except: return None
+            img = full_data.get('selected', {}).get('modelImage', {}).get('url')
+            if img:
+                return img
 
-    # 🔥 ULTIMATE ALERT GENERATOR
-    def compose_alert(self, pid, data, burst, tkn, b_data):
-        try:
-            link = f"https://{BASE_DOMAIN}/p/{pid}"
-            ts = datetime.now().strftime('%H:%M:%S')
-            
-            # SCENARIO 1: DETAILED DATA (API WORKED)
-            if isinstance(data, dict):
-                name = data.get('name', 'Item')
-                price_d = data.get('offerPrice') or data.get('price')
-                price = f"₹{int(price_d['value'])}" if price_d and price_d.get('value') else "N/A"
-                img = self.get_detailed_img(data)
-                
-                s_list = []
-                for v in data.get('variantOptions', []):
-                    qs = v.get('variantOptionQualifiers', [])
-                    sz = next((q['value'] for q in qs if q['qualifier'] in ['size', 'standardSize']), 'N/A')
-                    stk = v.get('stock', {}).get('stockLevel', 0)
-                    if stk > 0: s_list.append(f"✅ <b>{sz}</b> : {stk}")
-                    else: s_list.append(f"❌ {sz} : Out")
-                stk_txt = "\n".join(s_list) if s_list else "⚠️ Stock Check"
+            base_options = full_data.get('baseOptions', [])
+            if base_options:
+                img = base_options[0].get('options', [])[0].get('modelImage', {}).get('url')
+                if img:
+                    return img
 
-            # SCENARIO 2: API BLOCKED -> USE BASIC DATA (CRITICAL FALLBACK)
-            # This ensures you ALWAYS get a notification with the Link
-            elif isinstance(b_data, dict):
-                name = b_data.get('name', 'Item')
-                
-                # Extract Price
-                price = "Check Link"
-                if 'price' in b_data and 'value' in b_data['price']:
-                    price = f"₹{b_data['price']['value']}"
-                elif 'sellingPrice' in b_data and 'value' in b_data['sellingPrice']:
-                    price = f"₹{b_data['sellingPrice']['value']}"
-
-                img = self.extract_basic_img(b_data)
-                
-                # Explicitly tell user to check link
-                stk_txt = "🚨 SERVER BUSY - CLICK LINK TO CHECK STOCK"
-            
-            else:
-                return 
-
-            head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
-            msg = f"{head}\n\nDf <b>{name}</b>\n💰 <b>{price}</b>\n\n📏 <b>Status:</b>\n<pre>{stk_txt}</pre>\n\n⚡ Time: {ts}"
-            
-            send_signal(msg, tkn, image_url=img, button_url=link)
-            log(f"✅ Alert Sent: {pid}")
+            if 'images' in full_data and len(full_data['images']) > 0:
+                return full_data['images'][0].get('url')
 
         except Exception as e:
-            log(f"❌ Alert Gen Error: {e}")
+            log_error("Image extraction failed", e)
 
-    def scanner(self, cat_key):
-        cfg = CATEGORY_CONFIGS[cat_key]
-        base_url = cfg['url']
-        
-        while self.running:
-            if not self.check_time(): break
-            
-            try:
-                # 1. Scan Page 0
-                first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
-                data = self.js_fetch(cfg['tab'], first_page_url)
-                
-                if data == "403":
-                    time.sleep(5); continue
-                if not isinstance(data, dict):
-                    time.sleep(1); continue
+        return None
 
-                pagination = data.get('pagination', {})
-                total_pages = pagination.get('totalPages', 1)
-                
-                all_products = []
-                # 2. STANDALONE LOGIC: Loop ALL Pages
-                for page_num in range(total_pages):
-                    if page_num == 0:
-                        page_products = data.get('products', [])
-                    else:
-                        page_url = re.sub(r'currentPage=\d+', f'currentPage={page_num}', base_url)
-                        page_data = self.js_fetch(cfg['tab'], page_url)
-                        if isinstance(page_data, dict):
-                            page_products = page_data.get('products', [])
+    def extract_fallback_image(self, basic_info):
+        """Extract image from basic data"""
+        try:
+            if 'images' in basic_info and len(basic_info['images']) > 0:
+                return basic_info['images'][0].get('url')
+
+            if 'fnlColorVariantData' in basic_info:
+                return basic_info['fnlColorVariantData'].get('outfitPictureURL')
+
+        except Exception as e:
+            log_error("Fallback image extraction failed", e)
+
+        return None
+
+    def format_and_dispatch(self, item_id, category, full_data, is_batch, token, basic_info=None):
+        """Format data and send notification"""
+        try:
+            action_url = f"{BASE_DOMAIN}/p/{item_id}"
+            capture_time = datetime.now().strftime('%H:%M:%S')
+
+            if full_data:
+                title = full_data.get('productRelationID', full_data.get('name', 'Product'))
+
+                # Price extraction
+                price_display = "N/A"
+                price_obj = full_data.get('offerPrice') or full_data.get('price')
+                if price_obj:
+                    raw_value = price_obj.get('value')
+                    price_display = f"₹{int(raw_value)}" if raw_value else price_obj.get('formattedValue', 'N/A')
+
+                image_url = self.extract_primary_image(full_data)
+
+                # Stock availability parsing
+                stock_lines = []
+                variants = full_data.get('variantOptions', [])
+
+                if variants:
+                    for variant in variants:
+                        qualifiers = variant.get('variantOptionQualifiers', [])
+
+                        size = next((q['value'] for q in qualifiers if q['qualifier'] == 'size'),
+                                  next((q['value'] for q in qualifiers if q['qualifier'] == 'standardSize'), 'N/A'))
+
+                        quantity = variant.get('stock', {}).get('stockLevel', 0)
+                        status = variant.get('stock', {}).get('stockLevelStatus', '')
+
+                        if status != 'outOfStock' and quantity > 0:
+                            stock_lines.append(f"✅ **{size}** : {quantity} units")
+                        elif status == 'inStock':
+                            stock_lines.append(f"✅ **{size}** : Available")
                         else:
-                            page_products = []
-                    all_products.extend(page_products)
+                            stock_lines.append(f"❌ {size} : OOS")
 
-                new_session_items = []
-                for p in all_products:
-                    pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
-                    if not pid and '/p/' in p.get('url', ''):
-                        pid = p['url'].split('/p/')[1].split('.html')[0].split('?')[0]
-                    if pid and self.is_new(pid):
-                        new_session_items.append(p)
+                    stock_info = "\n".join(stock_lines)
+                else:
+                    stock_info = "⚠️ Stock data parsing required"
 
-                count = len(new_session_items)
-                if count > 0:
-                    log(f"✨ [{cat_key}] Detected {count} items")
-                    
-                    do_burst = count <= BURST_THRESHOLD
-                    token_pairs = [(p, resolve_token(cat_key, p)) for p in new_session_items]
+            else:
+                # Fallback to basic data
+                title = basic_info.get('name', 'Product Alert')
+                price_display = "Check Link"
+                image_url = self.extract_fallback_image(basic_info)
+                stock_info = "⚠️ Detailed stock unavailable (Fetch failed)"
 
-                    if do_burst:
-                        t1_items = [x[0] for x in token_pairs if x[1] == TOKEN_1]
-                        t2_items = [x[0] for x in token_pairs if x[1] == TOKEN_2]
-                        if t1_items: threading.Thread(target=self.fast_alert, args=(t1_items, TOKEN_1)).start()
-                        if t2_items: threading.Thread(target=self.fast_alert, args=(t2_items, TOKEN_2)).start()
+            # Message title logic
+            header = "📦 **STOCK UPDATE**" if is_batch else "🔥 **NEW ARRIVAL**"
 
-                    for p, tkn in token_pairs:
-                        pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
-                        self.q.put({'id': pid, 'cat': cat_key, 'burst': do_burst, 'base': p, 'tkn': tkn})
+            notification_msg = (
+                f"{header}\n\n"
+                f"👚 **{title}**\n"
+                f"💰 **{price_display}**\n\n"
+                f"📏 **Availability:**\n"
+                f"{stock_info}\n\n"
+                f"⚡ Captured: {capture_time}"
+            )
 
-                time.sleep(CHECK_INTERVAL)
+            send_notification(notification_msg, token, image_url=image_url, action_url=action_url)
+            log_success(f"Alert dispatched for {item_id}")
+
+        except Exception as e:
+            log_error(f"Alert formatting failed for {item_id}", e)
+
+    def monitor_category(self, category_name):
+        """Monitor specific category for changes"""
+        config = ENDPOINT_MAP[category_name]
+        tab = config['tab']
+        base_endpoint = config['endpoint']
+
+        log_info(f"Started monitoring {category_name}")
+
+        while self.active:
+            try:
+                # Fetch first page
+                first_page = re.sub(r'currentPage=\d+', 'currentPage=0', base_endpoint)
+                response = self.fetch_data_js(tab, first_page)
+
+                if response == "403_ACCESS_DENIED":
+                    log_error(f"[{category_name}] 403 Access Denied - Check authentication")
+                    time.sleep(5)
+                    continue
+
+                if not isinstance(response, dict):
+                    log_warning(f"[{category_name}] Invalid response format")
+                    time.sleep(2)
+                    continue
+
+                # Pagination handling
+                pagination_info = response.get('pagination', {})
+                total_pages = pagination_info.get('totalPages', 1)
+
+                log_info(f"[{category_name}] Processing {total_pages} pages")
+
+                collected_items = []
+
+                # Fetch all pages
+                for page_idx in range(total_pages):
+                    if page_idx == 0:
+                        page_items = response.get('products', [])
+                    else:
+                        page_endpoint = re.sub(r'currentPage=\d+', f'currentPage={page_idx}', base_endpoint)
+                        page_response = self.fetch_data_js(tab, page_endpoint)
+
+                        if isinstance(page_response, dict):
+                            page_items = page_response.get('products', [])
+                        else:
+                            log_warning(f"[{category_name}] Page {page_idx} fetch failed")
+                            page_items = []
+
+                    collected_items.extend(page_items)
+                    log_info(f"[{category_name}] Page {page_idx+1}/{total_pages} collected")
+
+                # Filter new items
+                new_items = []
+                for item in collected_items:
+                    item_id = item.get('fnlColorVariantData', {}).get('colorGroup') or item.get('code')
+
+                    if not item_id:
+                        url = item.get('url', '')
+                        if '/p/' in url:
+                            item_id = url.split('/p/')[1].split('.html')[0].split('?')[0]
+
+                    if not item_id:
+                        continue
+
+                    if self.is_new_item(item_id):
+                        new_items.append(item)
+
+                item_count = len(new_items)
+
+                if item_count > 0:
+                    log_success(f"✨ [{category_name}] Discovered {item_count} NEW items!")
+
+                    # Batch logic
+                    use_batch = item_count <= BATCH_THRESHOLD
+
+                    if use_batch:
+                        log_info(f"[{category_name}] Using BATCH mode for {item_count} items")
+                    else:
+                        log_warning(f"[{category_name}] Large batch ({item_count}), skipping rapid alerts for reliability")
+
+                    # Group by token
+                    grouped_items = []
+                    for item in new_items:
+                        token = determine_token(category_name, item)
+                        grouped_items.append((item, token))
+
+                    # Send batch alerts if enabled
+                    if use_batch:
+                        channel_a_batch = [x[0] for x in grouped_items if x[1] == TOKEN_CHANNEL_A]
+                        channel_b_batch = [x[0] for x in grouped_items if x[1] == TOKEN_CHANNEL_B]
+
+                        if channel_a_batch:
+                            threading.Thread(target=self.send_batch_alerts, 
+                                           args=(channel_a_batch, TOKEN_CHANNEL_A), 
+                                           daemon=True).start()
+
+                        if channel_b_batch:
+                            threading.Thread(target=self.send_batch_alerts, 
+                                           args=(channel_b_batch, TOKEN_CHANNEL_B), 
+                                           daemon=True).start()
+
+                    # Queue all items for detailed processing
+                    for item, token in grouped_items:
+                        item_id = item.get('fnlColorVariantData', {}).get('colorGroup') or item.get('code')
+
+                        self.detail_queue.put({
+                            'id': item_id,
+                            'category': category_name,
+                            'is_batch': use_batch,
+                            'basic_info': item,
+                            'token': token
+                        })
+
+                time.sleep(INTERVAL_CHECK)
+
             except Exception as e:
-                log(f"❌ Scanner Error [{cat_key}]: {e}")
+                log_error(f"[{category_name}] Monitoring loop error", e)
                 time.sleep(2)
 
-    def run(self):
-        if not self.launch(): return
-        log(f"🚀 Started. Workers: {NUM_WORKERS}. Max Runtime: 5h 50m")
-        
-        threading.Thread(target=self._storage_worker, daemon=True).start()
-        for _ in range(NUM_WORKERS):
-            threading.Thread(target=self._processor, daemon=True).start()
-        for k in CATEGORY_CONFIGS.keys():
-            threading.Thread(target=self.scanner, args=(k,), daemon=True).start()
-            
+    def start_monitoring(self):
+        """Start the monitoring engine"""
+        log_info("="*60)
+        log_info("AUTOMATION ENGINE STARTING")
+        log_info("="*60)
+
+        if not self.initialize_browser():
+            log_error("Browser initialization failed - Cannot proceed")
+            return
+
+        log_success("Browser ready - Starting worker threads")
+
+        # Start database writer
+        threading.Thread(target=self._database_writer, daemon=True).start()
+
+        # Start detail processors
+        log_info(f"Launching {WORKER_COUNT} worker threads")
+        for worker_id in range(WORKER_COUNT):
+            threading.Thread(target=self._detail_processor, daemon=True).start()
+
+        log_success(f"{WORKER_COUNT} workers active")
+
+        # Start category monitors
+        for category in ENDPOINT_MAP.keys():
+            threading.Thread(target=self.monitor_category, args=(category,), daemon=True).start()
+            log_info(f"Monitor thread launched for {category}")
+
+        log_success("All monitoring threads active")
+        log_info("="*60)
+        log_info("ENGINE FULLY OPERATIONAL - Monitoring in progress...")
+        log_info("="*60)
+
         try:
-            while self.running:
-                if not self.check_time(): break
+            while True:
                 time.sleep(1)
-        except: pass
-        
-        self.running = False
-        if self.browser: self.browser.quit()
-        log("👋 Shutdown.")
+        except KeyboardInterrupt:
+            log_warning("Shutdown signal received")
+            self.active = False
+            if self.browser:
+                self.browser.quit()
+                log_info("Browser closed")
+            log_info("Engine stopped gracefully")
+
+# ==========================================
+# 🎯 MAIN EXECUTION
+# ==========================================
 
 if __name__ == "__main__":
-    monitor = SecureMonitor()
-    monitor.run()
+    log_info("Application starting...")
+
+    # Validate environment variables
+    required_vars = ["TOKEN_CHANNEL_A", "TOKEN_CHANNEL_B", "TARGET_CHAT", "AUTH_DATA", "BASE_DOMAIN"]
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+
+    if missing_vars:
+        log_error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        sys.exit(1)
+
+    log_success("All environment variables validated")
+
+    engine = AutomationEngine()
+    engine.start_monitoring()
