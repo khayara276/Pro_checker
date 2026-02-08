@@ -14,6 +14,7 @@ from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from DrissionPage import ChromiumPage, ChromiumOptions
+from DrissionPage.errors import BrowserConnectError
 
 # ==========================================
 # 🔐 SECURE CONFIGURATION
@@ -45,8 +46,9 @@ SESSION_DB_PATH = "secure_session.db"
 CHECK_INTERVAL = 0.05
 COOKIE_FILE = "runtime_auth.json"
 
-# 🔥 OPTIMIZED FOR GITHUB ACTIONS
-NUM_WORKERS = 25  
+# 🔥 WORKER SETTINGS
+# 20 Workers + Jitter = Best Stability on GHA
+NUM_WORKERS = 20  
 BURST_THRESHOLD = 15
 MAX_RUNTIME = 5 * 3600 + 50 * 60 
 
@@ -116,7 +118,7 @@ class SecureMonitor:
         self.cache = set()
         self.start_ts = time.time()
         
-        # FRESH START: RAM Logic
+        # FRESH START
         if os.path.exists(SESSION_DB_PATH):
             try:
                 os.remove(SESSION_DB_PATH)
@@ -126,13 +128,13 @@ class SecureMonitor:
 
         if RAW_COOKIES:
             try:
-                # Validate JSON before writing
+                # Basic validation
                 json.loads(RAW_COOKIES)
                 with open(COOKIE_FILE, 'w') as f:
                     f.write(RAW_COOKIES)
                 log("🍪 Cookies Prepared.")
             except: 
-                log("❌ Invalid Cookie JSON in Secrets!")
+                log("❌ Invalid Cookie JSON!")
 
     def check_time(self):
         elapsed = time.time() - self.start_ts
@@ -171,54 +173,69 @@ class SecureMonitor:
         self.db_q.put(pid)
         return True
 
-    def get_opts(self, port):
+    def get_opts(self, port, force_headless=False):
         co = ChromiumOptions()
         co.set_local_port(port)
         co.set_user_data_path(os.path.join(tempfile.gettempdir(), f"secure_profile_{port}"))
+        
+        # Stability Flags for Linux/GHA
         co.set_argument('--no-sandbox')
         co.set_argument('--disable-dev-shm-usage')
         co.set_argument('--disable-gpu')
+        co.set_argument('--disable-setuid-sandbox')
         co.set_argument('--mute-audio')
         co.set_argument(f'--user-agent={USER_AGENT}')
-        
-        # Anti-Detection Flags
-        co.set_argument('--disable-blink-features=AutomationControlled')
-        co.set_argument('--disable-infobars')
         co.set_argument('--blink-settings=imagesEnabled=false')
+        
+        # Try to find Chrome automatically
+        chrome_paths = ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium-browser"]
+        for path in chrome_paths:
+            if os.path.exists(path):
+                co.set_paths(browser_path=path)
+                break
+
+        if force_headless:
+            # New Headless mode is much more stable than Xvfb on GHA
+            co.set_argument('--headless=new') 
+        
         return co
 
     def launch(self):
         log("🚀 Launching Secure Browser...")
-        port = random.randint(30001, 40000)
-        co = self.get_opts(port)
-        self.browser = ChromiumPage(co)
+        
+        # ATTEMPT 1: Try with Display (Xvfb)
+        try:
+            port = random.randint(30001, 39999)
+            co = self.get_opts(port, force_headless=False)
+            self.browser = ChromiumPage(co)
+            log("✅ Browser Started (Standard Mode)")
+        except Exception:
+            log("⚠️ Standard Launch Failed. Switching to Headless New...")
+            # ATTEMPT 2: Headless New (Failsafe)
+            try:
+                port = random.randint(40001, 49999)
+                co = self.get_opts(port, force_headless=True)
+                self.browser = ChromiumPage(co)
+                log("✅ Browser Started (Fallback Mode)")
+            except Exception as e:
+                log(f"❌ FATAL: Browser Launch Failed. {e}")
+                return False
         
         home = f"https://{BASE_DOMAIN}/"
         
-        # 🔥 PERFECT COOKIE INJECTION SEQUENCE
         if os.path.exists(COOKIE_FILE):
             try:
-                # 1. Open Domain first
                 self.browser.get(home)
                 time.sleep(2)
-                
-                # 2. Clear pre-existing & Inject New
                 self.browser.clear_cookies()
                 with open(COOKIE_FILE, 'r') as f:
                     c_data = json.load(f)
                     self.browser.set.cookies(c_data)
-                
-                # 3. Refresh and Warm-up
                 self.browser.refresh()
-                time.sleep(3) # Wait for login verification
-                
-                # 4. Scroll to simulate human
-                self.browser.run_js("window.scrollTo(0, 500);")
-                time.sleep(1)
-                
+                time.sleep(3)
                 log("✅ Session Authenticated.")
             except Exception as e:
-                log(f"⚠️ Auth Injection Error: {e}")
+                log(f"⚠️ Auth Error: {e}")
 
         # Tab Setup
         CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
@@ -229,7 +246,7 @@ class SecureMonitor:
         return True
 
     def js_fetch(self, tab, url):
-        # 🔥 HYBRID FETCH: Headers match Real User Agent
+        # High-Quality Headers to avoid 403
         js = f"""
             return fetch("{url}&_t=" + Date.now(), {{
                 method: 'GET',
@@ -268,16 +285,13 @@ class SecureMonitor:
                 time.sleep(0.05)
             except: pass
 
-    # Helper to pull image/price from Listing JSON (b_data)
+    # Helper to pull image from Listing JSON
     def extract_basic_img(self, p):
         try:
-            # Try images array first (from Men/Universal json)
+            if 'fnlColorVariantData' in p and 'outfitPictureURL' in p['fnlColorVariantData']:
+                 return p['fnlColorVariantData']['outfitPictureURL']
             if 'images' in p and len(p['images']) > 0:
                 return p['images'][0].get('url')
-            # Try outfitPictureURL (from Women json)
-            if 'fnlColorVariantData' in p:
-                url = p['fnlColorVariantData'].get('outfitPictureURL')
-                if url: return url
         except: pass
         return None
 
@@ -290,13 +304,16 @@ class SecureMonitor:
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
                 use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
                 
+                # Add jitter to prevent all workers hitting at once
+                time.sleep(random.uniform(0.1, 0.5))
+
                 # Try fetching details
-                for attempt in range(6):
+                for attempt in range(4):
                     full_d = self.js_fetch(use_tab, api_url)
                     
                     if isinstance(full_d, dict): break # Success
                     
-                    if full_d == "403": time.sleep(random.uniform(2, 4))
+                    if full_d == "403": time.sleep(random.uniform(2, 5))
                     else: time.sleep(1)
                 
                 # CRASH FIX: Default to None if failed
@@ -315,13 +332,13 @@ class SecureMonitor:
                    data['images'][0]['url']
         except: return None
 
-    # ROBUST ALERT GENERATOR
+    # 🔥 ULTIMATE ALERT GENERATOR
     def compose_alert(self, pid, data, burst, tkn, b_data):
         try:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
             ts = datetime.now().strftime('%H:%M:%S')
             
-            # 1. DETAILED DATA SUCCESS
+            # SCENARIO 1: DETAILED DATA (API WORKED)
             if isinstance(data, dict):
                 name = data.get('name', 'Item')
                 price_d = data.get('offerPrice') or data.get('price')
@@ -333,32 +350,29 @@ class SecureMonitor:
                     qs = v.get('variantOptionQualifiers', [])
                     sz = next((q['value'] for q in qs if q['qualifier'] in ['size', 'standardSize']), 'N/A')
                     stk = v.get('stock', {}).get('stockLevel', 0)
-                    stat = v.get('stock', {}).get('stockLevelStatus', '')
-                    if stat != 'outOfStock' and stk > 0: s_list.append(f"✅ <b>{sz}</b> : {stk}")
-                    elif stat == 'inStock': s_list.append(f"✅ <b>{sz}</b> : In Stock")
+                    if stk > 0: s_list.append(f"✅ <b>{sz}</b> : {stk}")
                     else: s_list.append(f"❌ {sz} : Out")
                 stk_txt = "\n".join(s_list) if s_list else "⚠️ Stock Check"
 
-            # 2. FALLBACK TO BASIC DATA (Prevents Crash & Keeps flow)
+            # SCENARIO 2: API BLOCKED -> USE BASIC DATA (CRITICAL FALLBACK)
+            # This ensures you ALWAYS get a notification with the Link
             elif isinstance(b_data, dict):
-                # Extract Name
                 name = b_data.get('name', 'Item')
                 
-                # Extract Price (Handling various JSON formats)
+                # Extract Price
                 price = "Check Link"
                 if 'price' in b_data and 'value' in b_data['price']:
                     price = f"₹{b_data['price']['value']}"
                 elif 'sellingPrice' in b_data and 'value' in b_data['sellingPrice']:
                     price = f"₹{b_data['sellingPrice']['value']}"
 
-                # Extract Image
                 img = self.extract_basic_img(b_data)
                 
-                stk_txt = "⚠️ Details Fetch Failed (API Blocked)"
+                # Explicitly tell user to check link
+                stk_txt = "🚨 SERVER BUSY - CLICK LINK TO CHECK STOCK"
             
             else:
-                log(f"❌ Skipping {pid}: No Data.")
-                return
+                return 
 
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
             msg = f"{head}\n\nDf <b>{name}</b>\n💰 <b>{price}</b>\n\n📏 <b>Status:</b>\n<pre>{stk_txt}</pre>\n\n⚡ Time: {ts}"
@@ -390,7 +404,7 @@ class SecureMonitor:
                 total_pages = pagination.get('totalPages', 1)
                 
                 all_products = []
-                # 2. Loop All Pages
+                # 2. STANDALONE LOGIC: Loop ALL Pages
                 for page_num in range(total_pages):
                     if page_num == 0:
                         page_products = data.get('products', [])
@@ -413,7 +427,7 @@ class SecureMonitor:
 
                 count = len(new_session_items)
                 if count > 0:
-                    log(f"✨ [{cat_key}] Detected {count} items (Pages: {total_pages})")
+                    log(f"✨ [{cat_key}] Detected {count} items")
                     
                     do_burst = count <= BURST_THRESHOLD
                     token_pairs = [(p, resolve_token(cat_key, p)) for p in new_session_items]
@@ -423,8 +437,6 @@ class SecureMonitor:
                         t2_items = [x[0] for x in token_pairs if x[1] == TOKEN_2]
                         if t1_items: threading.Thread(target=self.fast_alert, args=(t1_items, TOKEN_1)).start()
                         if t2_items: threading.Thread(target=self.fast_alert, args=(t2_items, TOKEN_2)).start()
-                    else:
-                        log(f"⚠️ Large Batch ({count}). Direct Queue.")
 
                     for p, tkn in token_pairs:
                         pid = p.get('fnlColorVariantData', {}).get('colorGroup') or p.get('code')
@@ -458,5 +470,3 @@ class SecureMonitor:
 if __name__ == "__main__":
     monitor = SecureMonitor()
     monitor.run()
-
-
