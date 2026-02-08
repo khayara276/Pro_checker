@@ -42,7 +42,7 @@ jobs:
             libdrm2 \
             libxkbcommon0 \
             libgbm1 \
-            libasound2 \
+            libasound2t64 \
             libxcomposite1 \
             libxdamage1 \
             libxfixes3 \
@@ -50,7 +50,8 @@ jobs:
             libpango-1.0-0 \
             libcairo2 \
             libatspi2.0-0 \
-            libgtk-3-0
+            libgtk-3-0 \
+            xvfb
 
       - name: 🚀 Start Automation Engine
         id: engine_run
