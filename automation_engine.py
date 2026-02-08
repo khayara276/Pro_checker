@@ -40,7 +40,7 @@ ENDPOINT_MAP = {
     }
 }
 
-# Session Handler with cookies
+# Session Handler
 msg_session = requests.Session()
 retry_config = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
 msg_session.mount('https://', HTTPAdapter(max_retries=retry_config, pool_connections=200, pool_maxsize=200))
@@ -76,7 +76,7 @@ def log_warning(message):
     sys.stdout.flush()
 
 def setup_cookies():
-    """Setup cookies from AUTH_DATA"""
+    """Setup cookies from AUTH_DATA with proper headers"""
     try:
         if not AUTH_DATA:
             log_error("No AUTH_DATA provided")
@@ -85,15 +85,36 @@ def setup_cookies():
         cookies_list = json.loads(AUTH_DATA)
         log_info(f"Loading {len(cookies_list)} cookies...")
 
-        # Convert cookie list to dict for requests session
+        # Build cookies dict from list
+        cookies_dict = {}
         for cookie in cookies_list:
-            api_session.cookies.set(
-                cookie.get('name'),
-                cookie.get('value'),
-                domain=cookie.get('domain', BASE_DOMAIN.replace('https://', '').replace('http://', ''))
-            )
+            name = cookie.get('name')
+            value = cookie.get('value')
+            if name and value:
+                cookies_dict[name] = value
 
-        log_success("Cookies loaded successfully")
+        # Set cookies using update
+        api_session.cookies.update(cookies_dict)
+
+        # Setup realistic browser headers
+        api_session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': f'{BASE_DOMAIN}/',
+            'Origin': BASE_DOMAIN,
+            'Connection': 'keep-alive',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+        })
+
+        log_success(f"Cookies and headers configured successfully")
+        log_info(f"Session cookies: {len(api_session.cookies)}")
         return True
 
     except Exception as e:
@@ -212,23 +233,17 @@ class AutomationEngine:
         return True
 
     def fetch_api_data(self, url):
-        """Fetch API data using requests with cookies"""
+        """Fetch API data using requests with cookies and proper headers"""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
-
             # Add timestamp to prevent caching
             separator = '&' if '?' in url else '?'
             url_with_ts = f"{url}{separator}_t={int(time.time() * 1000)}"
 
-            response = api_session.get(url_with_ts, headers=headers, timeout=15)
+            response = api_session.get(url_with_ts, timeout=15)
 
             if response.status_code == 403:
-                log_error(f"403 Access Denied - Check cookies")
+                log_error(f"403 Access Denied (Status: {response.status_code})")
+                log_warning(f"Response headers: {dict(response.headers)}")
                 return "403_ACCESS_DENIED"
 
             if response.status_code != 200:
@@ -241,7 +256,7 @@ class AutomationEngine:
             log_error("Request timeout")
             return "TIMEOUT"
         except Exception as e:
-            log_error(f"API fetch error: {url[:100]}", e)
+            log_error(f"API fetch error", e)
             return None
 
     def send_batch_alerts(self, items, token):
@@ -271,8 +286,6 @@ class AutomationEngine:
                 log_error("Batch alert error", e)
 
     def _detail_processor(self):
-        log_info("Detail processor started")
-
         while self.active:
             try:
                 task = self.detail_queue.get(timeout=1)
@@ -415,7 +428,7 @@ class AutomationEngine:
                 response = self.fetch_api_data(first_page)
 
                 if response == "403_ACCESS_DENIED":
-                    log_error(f"[{category_name}] 403 - Check cookies")
+                    log_error(f"[{category_name}] 403 - Check cookies/headers")
                     time.sleep(5)
                     continue
 
@@ -431,7 +444,7 @@ class AutomationEngine:
 
                 collected_items = []
 
-                # Fetch ALL pages first (standalone logic)
+                # Fetch ALL pages first
                 for page_idx in range(total_pages):
                     if page_idx == 0:
                         page_items = response.get('products', [])
