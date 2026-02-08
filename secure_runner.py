@@ -45,13 +45,12 @@ SESSION_DB_PATH = "secure_session.db"
 CHECK_INTERVAL = 0.05
 COOKIE_FILE = "runtime_auth.json"
 
-# 🔥 OPTIMIZED SPEED SETTINGS
-# 25 is the Sweet Spot for GHA. 50 chokes the CPU, 10 is too slow.
+# 🔥 OPTIMIZED FOR GITHUB ACTIONS
 NUM_WORKERS = 25  
 BURST_THRESHOLD = 15
 MAX_RUNTIME = 5 * 3600 + 50 * 60 
 
-# Explicit User Agent for Consistency
+# Real User Agent (Matches Windows Chrome)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 URL_PARAMS_UNI = "?fields=SITE&currentPage=0&pageSize=45&format=json&query=%3Arelevance&gridColumns=5&segmentIds=23%2C14%2C18%2C9&cohortIds=value%7Cmen%2CTEMP_M1_LL_FG_NOV&customerType=Existing&facets=&customertype=Existing&advfilter=true&platform=Desktop&showAdsOnNextPage=false&is_ads_enable_plp=true&displayRatings=true&segmentIds=&&store=shein"
@@ -117,20 +116,23 @@ class SecureMonitor:
         self.cache = set()
         self.start_ts = time.time()
         
-        # Fresh Session Logic (RAM)
+        # FRESH START: RAM Logic
         if os.path.exists(SESSION_DB_PATH):
             try:
                 os.remove(SESSION_DB_PATH)
-                log("🗑️ RAM Cleared: Starting Fresh.")
+                log("🗑️ RAM Cleared.")
             except: pass
         self.init_storage()
 
         if RAW_COOKIES:
             try:
+                # Validate JSON before writing
+                json.loads(RAW_COOKIES)
                 with open(COOKIE_FILE, 'w') as f:
                     f.write(RAW_COOKIES)
-                log("🍪 Cookies Loaded.")
-            except: pass
+                log("🍪 Cookies Prepared.")
+            except: 
+                log("❌ Invalid Cookie JSON in Secrets!")
 
     def check_time(self):
         elapsed = time.time() - self.start_ts
@@ -178,31 +180,47 @@ class SecureMonitor:
         co.set_argument('--disable-gpu')
         co.set_argument('--mute-audio')
         co.set_argument(f'--user-agent={USER_AGENT}')
+        
+        # Anti-Detection Flags
+        co.set_argument('--disable-blink-features=AutomationControlled')
+        co.set_argument('--disable-infobars')
         co.set_argument('--blink-settings=imagesEnabled=false')
         return co
 
     def launch(self):
-        log("🚀 Launching Browser...")
+        log("🚀 Launching Secure Browser...")
         port = random.randint(30001, 40000)
         co = self.get_opts(port)
         self.browser = ChromiumPage(co)
         
         home = f"https://{BASE_DOMAIN}/"
         
+        # 🔥 PERFECT COOKIE INJECTION SEQUENCE
         if os.path.exists(COOKIE_FILE):
             try:
+                # 1. Open Domain first
+                self.browser.get(home)
+                time.sleep(2)
+                
+                # 2. Clear pre-existing & Inject New
+                self.browser.clear_cookies()
                 with open(COOKIE_FILE, 'r') as f:
                     c_data = json.load(f)
-                    self.browser.get(home)
-                    time.sleep(1) 
                     self.browser.set.cookies(c_data)
-                    self.browser.refresh()
-                    time.sleep(3) 
-                    log("✅ Auth Injected.")
+                
+                # 3. Refresh and Warm-up
+                self.browser.refresh()
+                time.sleep(3) # Wait for login verification
+                
+                # 4. Scroll to simulate human
+                self.browser.run_js("window.scrollTo(0, 500);")
+                time.sleep(1)
+                
+                log("✅ Session Authenticated.")
             except Exception as e:
-                log(f"⚠️ Auth Error: {e}")
+                log(f"⚠️ Auth Injection Error: {e}")
 
-        # WARM UP TABS (Crucial for Speed)
+        # Tab Setup
         CATEGORY_CONFIGS['Universal']['tab'] = self.browser.latest_tab
         for cat in ['TypeA', 'TypeB']:
             t = self.browser.new_tab(home)
@@ -211,8 +229,7 @@ class SecureMonitor:
         return True
 
     def js_fetch(self, tab, url):
-        # 🔥 ULTRA SECURE FETCH (Mimics Real User to Avoid 403)
-        # We inject headers that make it look exactly like a browser request
+        # 🔥 HYBRID FETCH: Headers match Real User Agent
         js = f"""
             return fetch("{url}&_t=" + Date.now(), {{
                 method: 'GET',
@@ -224,9 +241,6 @@ class SecureMonitor:
                     'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
                     'Sec-Ch-Ua-Mobile': '?0',
                     'Sec-Ch-Ua-Platform': '"Windows"',
-                    'Sec-Fetch-Dest': 'empty',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Site': 'same-origin',
                     'User-Agent': '{USER_AGENT}',
                     'Referer': 'https://{BASE_DOMAIN}/'
                 }}
@@ -254,16 +268,19 @@ class SecureMonitor:
                 time.sleep(0.05)
             except: pass
 
+    # Helper to pull image/price from Listing JSON (b_data)
     def extract_basic_img(self, p):
         try:
+            # Try images array first (from Men/Universal json)
             if 'images' in p and len(p['images']) > 0:
                 return p['images'][0].get('url')
+            # Try outfitPictureURL (from Women json)
             if 'fnlColorVariantData' in p:
-                return p['fnlColorVariantData'].get('outfitPictureURL')
+                url = p['fnlColorVariantData'].get('outfitPictureURL')
+                if url: return url
         except: pass
         return None
 
-    # DETAILED WORKER
     def _processor(self):
         while self.running:
             try:
@@ -273,22 +290,17 @@ class SecureMonitor:
                 tabs = [v['tab'] for v in CATEGORY_CONFIGS.values() if v['tab']]
                 use_tab = random.choice(tabs) if tabs else CATEGORY_CONFIGS['Universal']['tab']
                 
-                # Aggressive Retry Strategy (6 tries)
+                # Try fetching details
                 for attempt in range(6):
                     full_d = self.js_fetch(use_tab, api_url)
                     
-                    if isinstance(full_d, dict): 
-                        break # Success!
+                    if isinstance(full_d, dict): break # Success
                     
-                    # Smart Backoff: Wait only if blocked
-                    if full_d == "403": 
-                        time.sleep(random.uniform(2, 4))
-                    else: 
-                        time.sleep(1) # Network glitch, retry fast
+                    if full_d == "403": time.sleep(random.uniform(2, 4))
+                    else: time.sleep(1)
                 
-                # CRASH FIX: Ensure full_d is None if it's still a string
-                if not isinstance(full_d, dict):
-                    full_d = None
+                # CRASH FIX: Default to None if failed
+                if not isinstance(full_d, dict): full_d = None
                 
                 self.compose_alert(task['id'], full_d, task['burst'], task['tkn'], task['base'])
                 self.q.task_done()
@@ -309,7 +321,7 @@ class SecureMonitor:
             link = f"https://{BASE_DOMAIN}/p/{pid}"
             ts = datetime.now().strftime('%H:%M:%S')
             
-            # 1. PRIMARY: USE DETAILED DATA
+            # 1. DETAILED DATA SUCCESS
             if isinstance(data, dict):
                 name = data.get('name', 'Item')
                 price_d = data.get('offerPrice') or data.get('price')
@@ -327,15 +339,25 @@ class SecureMonitor:
                     else: s_list.append(f"❌ {sz} : Out")
                 stk_txt = "\n".join(s_list) if s_list else "⚠️ Stock Check"
 
-            # 2. FALLBACK: USE BASIC DATA
+            # 2. FALLBACK TO BASIC DATA (Prevents Crash & Keeps flow)
             elif isinstance(b_data, dict):
+                # Extract Name
                 name = b_data.get('name', 'Item')
+                
+                # Extract Price (Handling various JSON formats)
                 price = "Check Link"
+                if 'price' in b_data and 'value' in b_data['price']:
+                    price = f"₹{b_data['price']['value']}"
+                elif 'sellingPrice' in b_data and 'value' in b_data['sellingPrice']:
+                    price = f"₹{b_data['sellingPrice']['value']}"
+
+                # Extract Image
                 img = self.extract_basic_img(b_data)
+                
                 stk_txt = "⚠️ Details Fetch Failed (API Blocked)"
             
             else:
-                log(f"❌ Skipping {pid}: Invalid Data.")
+                log(f"❌ Skipping {pid}: No Data.")
                 return
 
             head = "<b>📦 STOCK INFO</b>" if burst else "<b>🔥 NEW ARRIVAL</b>"
@@ -355,7 +377,7 @@ class SecureMonitor:
             if not self.check_time(): break
             
             try:
-                # 1. Page 0 Scan
+                # 1. Scan Page 0
                 first_page_url = re.sub(r'currentPage=\d+', 'currentPage=0', base_url)
                 data = self.js_fetch(cfg['tab'], first_page_url)
                 
@@ -368,7 +390,7 @@ class SecureMonitor:
                 total_pages = pagination.get('totalPages', 1)
                 
                 all_products = []
-                # 2. FULL PAGINATION LOOP
+                # 2. Loop All Pages
                 for page_num in range(total_pages):
                     if page_num == 0:
                         page_products = data.get('products', [])
@@ -436,3 +458,5 @@ class SecureMonitor:
 if __name__ == "__main__":
     monitor = SecureMonitor()
     monitor.run()
+
+
