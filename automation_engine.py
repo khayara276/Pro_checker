@@ -9,6 +9,7 @@ import requests
 import sqlite3
 import tempfile
 import sys
+import subprocess
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -84,6 +85,39 @@ def log_warning(message):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{timestamp}] ⚠️  {message}")
     sys.stdout.flush()
+
+def get_chromium_path():
+    """Get Playwright Chromium executable path"""
+    try:
+        # Try to get playwright chromium path
+        result = subprocess.run(
+            ['playwright', 'install', '--dry-run', 'chromium'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        # Common paths for playwright chromium
+        home = os.path.expanduser("~")
+        possible_paths = [
+            f"{home}/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+            "/home/runner/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+        ]
+
+        import glob
+        for pattern in possible_paths:
+            matches = glob.glob(pattern)
+            if matches:
+                log_success(f"Found Playwright Chromium at: {matches[0]}")
+                return matches[0]
+
+        # If not found, return None and let DrissionPage use system chromium
+        log_warning("Playwright chromium path not found, using system default")
+        return None
+
+    except Exception as e:
+        log_error("Could not locate chromium", e)
+        return None
 
 def send_notification(message, token, image_url=None, action_url=None):
     """Send message via Telegram API"""
@@ -208,13 +242,22 @@ class AutomationEngine:
         """Configure browser options"""
         log_info(f"Configuring browser on port {port} (headless={headless})")
         co = ChromiumOptions()
+
+        # Get Playwright Chromium path
+        chromium_path = get_chromium_path()
+        if chromium_path:
+            co.set_browser_path(chromium_path)
+            log_info(f"Using Playwright Chromium: {chromium_path}")
+
         co.set_local_port(port)
         co.set_user_data_path(os.path.join(tempfile.gettempdir(), f"automation_profile_{port}"))
         co.set_argument('--no-sandbox')
         co.set_argument('--disable-dev-shm-usage')
+        co.set_argument('--disable-gpu')
+        co.set_argument('--disable-software-rasterizer')
+        co.set_argument('--disable-extensions')
         co.set_argument('--mute-audio')
         co.set_argument('--blink-settings=imagesEnabled=false')
-        co.set_argument('--disable-gpu')
 
         if headless:
             co.set_argument('--headless=new')
